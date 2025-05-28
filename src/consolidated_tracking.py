@@ -57,7 +57,7 @@ def cleanup_debug_files(debug_dir):
                 except:
                     pass
 
-# Global checkpoint tracker
+
 checkpoint_times = {}
 last_checkpoint = None
 start_time = time.time()
@@ -99,16 +99,16 @@ def setup_timeout_monitor(timeout_minutes=30):
     signal.alarm(timeout_minutes * 60)
     print(f"[MONITOR] Timeout monitor set for {timeout_minutes} minutes")
 
-# Initialize module-level variables
+
 MULTI_FRAME_AVAILABLE = True  
 TRACKING_MODE = 'multi'  
 DEBUG_MODE = False 
 
-# Load environment variables
+#env variables
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 load_dotenv(dotenv_path)
 
-# Initialize label IDs
+#Initialise label IDs
 LABEL_IDS = {
     'FLUID_OF': os.getenv('LABEL_ID_FLUID_OF', 'L_JykNe7'),
     'FREE_FLUID': os.getenv('LABEL_ID_FREE_FLUID', 'L_13yPql'),
@@ -117,15 +117,13 @@ LABEL_IDS = {
     'MACHINE_GROUP': os.getenv('LABEL_ID_MACHINE_GROUP', 'G_RJY6Qn')
 }
 
-# Initialize the label ID variables
+#Initialise the label ID variables
 LABEL_ID_FLUID_OF = LABEL_IDS['FLUID_OF']
 LABEL_ID_FREE_FLUID = LABEL_IDS['FREE_FLUID']
 LABEL_ID_NO_FLUID = LABEL_IDS['NO_FLUID']
 LABEL_ID_GROUND_TRUTH = LABEL_IDS['GROUND_TRUTH']
 LABEL_ID_MACHINE_GROUP = LABEL_IDS['MACHINE_GROUP']
-
-# Initialize the label ID variables - use consistent values
-label_id_fluid = LABEL_ID_FLUID_OF  # Don't override this later
+label_id_fluid = LABEL_ID_FLUID_OF  
 label_id_no_fluid = LABEL_ID_NO_FLUID
 
 # Function to handle no-fluid annotations
@@ -137,19 +135,19 @@ def is_no_fluid_annotation(annotation):
     """Check if an annotation represents no fluid"""
     if isinstance(annotation, dict):
         return annotation.get('labelId') == LABEL_ID_NO_FLUID
-    elif hasattr(annotation, 'labelId'):  # Handle pandas Series
+    elif hasattr(annotation, 'labelId'):  
         return annotation.labelId == LABEL_ID_NO_FLUID
     return False
 
 def is_fluid_annotation(annotation):
     """Check if an annotation represents fluid"""
     if isinstance(annotation, dict):
-        return annotation.get('labelId') == LABEL_ID_FREE_FLUID  # Use FREE_FLUID instead of FLUID_OF
-    elif hasattr(annotation, 'labelId'):  # Handle pandas Series
-        return annotation.labelId == LABEL_ID_FREE_FLUID  # Use FREE_FLUID instead of FLUID_OF
+        return annotation.get('labelId') == LABEL_ID_FREE_FLUID  
+    elif hasattr(annotation, 'labelId'):  
+        return annotation.labelId == LABEL_ID_FREE_FLUID  
     return False
 
-# Print initial values
+# initial values sanity check 
 print(f"\nInitialized label IDs:")
 print(f"LABEL_ID_FLUID_OF: {LABEL_ID_FLUID_OF}")
 print(f"LABEL_ID_FREE_FLUID: {LABEL_ID_FREE_FLUID}")
@@ -160,14 +158,14 @@ print(f"label_id_fluid: {label_id_fluid}")
 print(f"label_id_no_fluid: {label_id_no_fluid}\n")
 
 # Create a dedicated debug log file
-debug_log_path = f"debug_no_fluid_{int(time.time())}.log"
-debug_log = open(debug_log_path, "w")
+#debug_log_path = f"debug_no_fluid_{int(time.time())}.log"
+#debug_log = open(debug_log_path, "w")
 
-def debug_print(message):
-    """Write debug messages to a separate file"""
-    debug_log.write(f"{message}\n")
-    debug_log.flush()  
-debug_print(f"=== DEBUG LOG STARTED AT {time.ctime()} ===")
+#def debug_print(message):
+   #  """Write debug messages to a separate file"""
+   # debug_log.write(f"{message}\n")
+    #debug_log.flush()  
+#debug_print(f"=== DEBUG LOG STARTED AT {time.ctime()} ===")
 
 
 # Enable debug mode
@@ -313,7 +311,7 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
     if flow is not None:
         grid = np.zeros((h * 3, w * 3, 3), dtype=np.uint8)  # 3x3 grid
     else:
-        grid = np.zeros((h * 2, w * 3, 3), dtype=np.uint8)  # 2x3 grid (original size)
+        grid = np.zeros((h * 2, w * 3, 3), dtype=np.uint8)  
     
     # Convert masks to binary for contour detection and area calculation
     binary_initial = (initial_mask > 0.5).astype(np.uint8) if initial_mask is not None else None
@@ -328,10 +326,8 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
     
     # Initial Mask (Top Middle)
     if initial_mask is not None:
-        # Create visualization using thresholding
-        initial_viz = frame.copy()
         
-        # Only color pixels above threshold
+        initial_viz = frame.copy()
         initial_viz[initial_mask > 0.5] = initial_viz[initial_mask > 0.5] * 0.7 + np.array([0, 0, 255], dtype=np.uint8) * 0.3
         
         # Add contours to initial mask
@@ -353,8 +349,6 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
     # Flow Mask (Top Right)
     if flow_mask is not None:
         flow_viz = frame.copy()
-        
-        # Only color pixels above threshold
         flow_viz[flow_mask > 0.5] = flow_viz[flow_mask > 0.5] * 0.7 + np.array([255, 0, 0], dtype=np.uint8) * 0.3
         
         # Add contours to flow mask
@@ -416,8 +410,6 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
     # Adjusted Mask (Middle Middle)
     if adjusted_mask is not None:
         adjusted_viz = frame.copy()
-        
-        # Only colour pixels above threshold (0.5)
         adjusted_viz[adjusted_mask > 0.5] = adjusted_viz[adjusted_mask > 0.5] * 0.7 + np.array([0, 0, 255], dtype=np.uint8) * 0.3
         
         # Add contours
@@ -432,8 +424,6 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
     # Final Mask (Middle Right)
     if final_mask is not None:
         final_viz = frame.copy()
-        
-        # Only colour pixels above threshold
         final_viz[final_mask > 0.5] = final_viz[final_mask > 0.5] * 0.7 + np.array([0, 255, 0], dtype=np.uint8) * 0.3
         
         # Add contours to final mask
@@ -531,7 +521,7 @@ def create_difference_map(frame1, frame2, flow=None):
         flow: Optional flow field between the frames (numpy array)
         
     Returns:
-        Visualization showing frame differences and enhanced flow vectors
+        Visualisation showing frame differences and enhanced flow vectors
     """
     # Convert frames to grayscale if they're not already
     if len(frame1.shape) == 3:
@@ -547,7 +537,7 @@ def create_difference_map(frame1, frame2, flow=None):
     # Enhance difference for better visibility
     diff_enhanced = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
     
-    # Apply color map for better visualization
+    # Apply colour map for better visualization
     diff_color = cv2.applyColorMap(diff_enhanced, cv2.COLORMAP_JET)
     
     # If flow is provided, overlay flow vectors on areas with significant differences
@@ -572,10 +562,10 @@ def create_difference_map(frame1, frame2, flow=None):
             for x in range(0, w, skip):
                 if diff_mask[y, x] and flow_mag_norm[y, x] > 0.05:  # Lower threshold to show more arrows
                     # Amplify the vectors significantly
-                    fx = flow[y, x, 0] * 3.0  # Much larger scale factor
+                    fx = flow[y, x, 0] * 3.0 
                     fy = flow[y, x, 1] * 3.0
                     
-                    # First draw a black outline/shadow
+                
                     cv2.arrowedLine(
                         diff_color_darkened, 
                         (x, y), 
@@ -585,7 +575,7 @@ def create_difference_map(frame1, frame2, flow=None):
                         tipLength=0.5   # Larger arrow tip
                     )
                     
-                    # Then draw a bright arrow on top
+                    # bright arrow on top
                     cv2.arrowedLine(
                         diff_color_darkened, 
                         (x, y), 
@@ -598,7 +588,7 @@ def create_difference_map(frame1, frame2, flow=None):
         
         diff_color = diff_color_darkened
     
-    # Create a combined visualization
+    # Create a combined visualisation
     result = np.zeros((frame1.shape[0] * 2, frame1.shape[1], 3), dtype=np.uint8)
     
     # Add original frames
@@ -923,7 +913,7 @@ def upload_masks_to_mdai(client, masks_data, project_id, dataset_id=None):
         dataset_id: MD.ai dataset ID (optional)
     """
     if dataset_id is None:
-        dataset_id = DATASET_ID  # Use the global dataset ID if not provided
+        dataset_id = DATASET_ID  
         
     try:
         print("\nPreparing annotations for MD.ai upload...")
@@ -938,15 +928,15 @@ def upload_masks_to_mdai(client, masks_data, project_id, dataset_id=None):
             if mask_info is None:
                 continue
                 
-            # Add to the cleanup set
+            
             cleanup_pairs.add((mask_info['study_uid'], mask_info['series_uid']))
                 
             annotation = {
                 'labelId': LABEL_ID_FLUID_OF,
                 'StudyInstanceUID': mask_info['study_uid'],
                 'SeriesInstanceUID': mask_info['series_uid'],
-                'frameNumber': int(mask_info['frame_number']),  # Ensure integer
-                'data': mask_info['mask_data'],  # Use the converted mask data directly
+                'frameNumber': int(mask_info['frame_number']),  
+                'data': mask_info['mask_data'],  
                 'groupId': LABEL_ID_MACHINE_GROUP
             }
             annotations.append(annotation)
@@ -979,7 +969,7 @@ def upload_masks_to_mdai(client, masks_data, project_id, dataset_id=None):
                 print(f"Successfully uploaded {successful_count} out of {len(annotations)} annotations")
                 
                 # Return empty list as a placeholder for successful annotations
-                # (MD.ai's import_annotations doesn't return the successful IDs)
+                
                 return [{'success': True} for _ in range(successful_count)]
             else:
                 print(f"Successfully uploaded all {len(annotations)} annotations")
@@ -1081,61 +1071,6 @@ def verify_uploads(client, responses):
         return False
     
 
-def visualize_flow(frame, flow, skip=8):
-    """
-    Visualize optical flow for debugging
-    
-    Args:
-        frame: Input frame
-        flow: Flow field (x and y displacements)
-        skip: Spacing between displayed vectors
-        
-    Returns:
-        Visualization image
-    """
-    h, w = frame.shape[:2]
-    
-    # Create empty visualization image
-    vis = np.zeros((h * 2, w, 3), dtype=np.uint8)
-    
-    # Copy original frame to top half
-    if len(frame.shape) == 2:  # Convert grayscale to color if needed
-        vis[:h, :] = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    else:
-        vis[:h, :] = frame.copy()
-    
-    # Create flow visualization
-    # Calculate flow magnitude and angle
-    flow_x = flow[..., 0]
-    flow_y = flow[..., 1]
-    magnitude, angle = cv2.cartToPolar(flow_x, flow_y)
-    
-    # Create HSV image for flow visualization
-    hsv = np.zeros((h, w, 3), dtype=np.uint8)
-    hsv[..., 0] = angle * 180 / np.pi / 2  # Hue: direction
-    hsv[..., 1] = 255                       # Saturation: max
-    hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)  # Value: magnitude
-    
-    # Convert HSV to BGR
-    flow_vis = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    
-    # Copy flow visualization to bottom half
-    vis[h:, :] = flow_vis
-    
-    # Draw flow vectors on top half
-    for y in range(0, h, skip):
-        for x in range(0, w, skip):
-            fx, fy = flow[y, x]
-            
-            # Only draw significant flow
-            if np.sqrt(fx*fx + fy*fy) > 1:
-                cv2.arrowedLine(vis[:h], (x, y), (int(x+fx), int(y+fy)), (0, 255, 0), 1, tipLength=0.3)
-    
-    # Add labels
-    cv2.putText(vis, "Original frame", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
-    cv2.putText(vis, "Flow visualization", (10, h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
-    
-    return vis
 
 def diagnose_video_processing(video_path, output_video_path):
     """
@@ -1367,11 +1302,11 @@ def save_combined_video(video_path, output_video_path, initial_mask, frame_numbe
                 traceback.print_exc()  # Print full stack trace
                 continue
 
-        # Make sure to close the video writer properly
+        
         out.release()
         print(f"\nFrames written to video: {frames_written}")
         
-        # NEW TRACKING VALIDATION CODE - MOVED HERE BEFORE MD.AI UPLOAD
+        
         print("\n==== STARTING TRACKING VALIDATION ====")
         print(f"Debug directory: {debug_dir}")
         print(f"Output video path: {output_video_path}")
@@ -1681,8 +1616,7 @@ def process_video_with_multi_frame_tracking_enhanced(video_path, annotations_df,
         print(f"\nPreparing annotations for MD.ai upload...")
         
         try:
-            # Delete existing machine annotations first
-            from src.multi_frame_tracking.utils import delete_existing_annotations
+           
             
             from src.multi_frame_tracking.utils import delete_existing_annotations
             
@@ -1696,7 +1630,7 @@ def process_video_with_multi_frame_tracking_enhanced(video_path, annotations_df,
             
             print(f"Deleted {deleted_count} existing fluid annotations")
             
-            # Also delete no-fluid annotations
+            # delete no-fluid annotations
             if label_id_no_fluid:
                 deleted_no_fluid = delete_existing_annotations(
                     client=mdai_client,
@@ -1714,7 +1648,7 @@ def process_video_with_multi_frame_tracking_enhanced(video_path, annotations_df,
             current_batch = []
             
             for frame_idx, mask_info in all_masks.items():
-                # Skip human annotations (already in MD.ai)
+             
                 if isinstance(mask_info, dict) and mask_info.get('is_annotation', False):
                     continue
                 
@@ -1741,7 +1675,7 @@ def process_video_with_multi_frame_tracking_enhanced(video_path, annotations_df,
                             'groupId': label_id_machine
                         }
                         
-                        # Add timestamp and source information
+                        
                         annotation['createdAt'] = datetime.now().isoformat()
                         
                         if isinstance(mask_info, dict) and 'source' in mask_info:
@@ -1843,12 +1777,12 @@ def process_videos_with_tracking():
     checkpoint("FUNCTION_START", "process_videos_with_tracking started")
     
     # Create timestamp file in the root directory
-    with open("multi_frame_test.txt", "w") as f:
-        f.write(f"Test started at {datetime.now()}\n")
-        f.write(f"TRACKING_MODE = {TRACKING_MODE}\n")
-        f.write(f"MULTI_FRAME_AVAILABLE = {MULTI_FRAME_AVAILABLE}\n")
+    #with open("multi_frame_test.txt", "w") as f:
+        #f.write(f"Test started at {datetime.now()}\n")
+        #f.write(f"TRACKING_MODE = {TRACKING_MODE}\n")
+        #f.write(f"MULTI_FRAME_AVAILABLE = {MULTI_FRAME_AVAILABLE}\n")
     
-    checkpoint("TIMESTAMP_FILE", "Created timestamp file")
+   #checkpoint("TIMESTAMP_FILE", "Created timestamp file")
     
     print("\n==== MULTI-FRAME TRACKING TEST ====")
     print(f"TRACKING_MODE: {TRACKING_MODE}")
@@ -1873,10 +1807,10 @@ def process_videos_with_tracking():
     
     checkpoint("DIRECTORIES", "Created output directories")
     
-    # Initialize video counter
+    # Initialise video counter
     videos_processed = 0
     
-    # Initialize optical flow processor
+    # Initialise optical flow processor
     print("Initializing optical flow processor...")
     flow_processor = OpticalFlowProcessor(method=FLOW_METHOD[0])
     
@@ -3642,7 +3576,9 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
     print(f"✓ Saved final results to {final_results_path}")
     
     return results
-# ===== 8. MAIN EXECUTION =====
+
+#  MAIN EXECUTION 
+
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Ultrasound free fluid tracking using optical flow')
@@ -3735,7 +3671,7 @@ if __name__ == "__main__":
         if args.debug:
             DEBUG_MODE = True
 
-        # Initialize logging
+        # Initialise logging
         log_file = setup_logging(OUTPUT_DIR)
         print(f"All console output will be saved to: {log_file}")
         
@@ -3780,7 +3716,6 @@ if __name__ == "__main__":
             print(f"Error connecting to MD.ai: {str(e)}")
             sys.exit(1)
 
-        # Don't load the project object yet - we'll do this after verifying our local files
         print("Skipping project object creation to avoid corrupted file issues")
 
         # Get project
