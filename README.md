@@ -329,6 +329,8 @@ goobusters/
 
 #### Ground Truth Creation (`--create-ground-truth`)
 
+The main distinction is that ground truth creation uses learning to propagate known annotations spatially (across nearby frames), while the feedback loop uses learning to improve the tracking parameters temporally (across iterations) based on performance metrics against expert-verified ground truth.
+
 Purpose:
 - Creates a verified dataset of fluid annotations
 - Establishes "source of truth" for algorithm evaluation

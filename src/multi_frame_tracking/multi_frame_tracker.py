@@ -493,24 +493,33 @@ class MultiFrameTracker:
         print(f"\nProcessing no-fluid regions:")
         print(f"Found {len(no_fluid_frames)} explicit no-fluid frames: {sorted(no_fluid_frames)}")
         
-        # Rule 1: If first annotation is clear/no-fluid, all frames before it are clear
-        if frame_types[0] == 'clear' or annotations[0].get('is_no_fluid', False):
-            start_frame = frame_numbers[0]
-            print(f"\nRule 1: First annotation is clear/no-fluid at frame {start_frame}")
-            print(f"  Setting frames 0 to {start_frame-1} as clear")
-            for frame in range(start_frame):
-                clear_frames.add(frame)
+        # CRITICAL: Process no-fluid frames first - this is the highest priority rule
+        if len(no_fluid_frames) >= 2:
+            print("\nRule 0: Processing regions between no-fluid annotations (HIGHEST PRIORITY)")
+            no_fluid_frames = sorted(no_fluid_frames)
+            
+            # Process each pair of no-fluid frames
+            for i in range(len(no_fluid_frames) - 1):
+                start_frame = no_fluid_frames[i]
+                end_frame = no_fluid_frames[i + 1]
+                print(f"  Found no-fluid region from {start_frame} to {end_frame}")
                 
-        # Rule 2: If last annotation is clear/no-fluid, all frames after it are clear
+                # Add ALL frames in this range to clear_frames (inclusive)
+                for frame in range(start_frame, end_frame + 1):
+                    clear_frames.add(frame)
+                    
+                print(f"  Added {end_frame - start_frame + 1} frames to clear set")
+        
+        # Rule 1: If last annotation is clear/no-fluid, all frames after it are clear
         if frame_types[-1] == 'clear' or annotations[-1].get('is_no_fluid', False):
             end_frame = frame_numbers[-1]
-            print(f"\nRule 2: Last annotation is clear/no-fluid at frame {end_frame}")
+            print(f"\nRule 1: Last annotation is clear/no-fluid at frame {end_frame}")
             print(f"  Setting frames {end_frame+1} to {total_frames-1} as clear")
             for frame in range(end_frame + 1, total_frames):
                 clear_frames.add(frame)
         
-        # Rule 3: All frames between two clear annotations are clear
-        print("\nRule 3: Processing regions between clear annotations")
+        # Rule 2: All frames between two clear annotations are clear
+        print("\nRule 2: Processing regions between clear annotations")
         for i in range(len(annotations) - 1):
             if frame_types[i] == 'clear' and frame_types[i+1] == 'clear':
                 start_frame = frame_numbers[i]
@@ -518,47 +527,6 @@ class MultiFrameTracker:
                 print(f"  Found clear region from {start_frame} to {end_frame}")
                 for frame in range(start_frame + 1, end_frame):
                     clear_frames.add(frame)
-                    
-        # Rule 4: CRITICAL - All frames between any two no-fluid labels are clear
-        # This is the most important rule for no-fluid regions
-        if len(no_fluid_frames) >= 2:
-            print("\nRule 4: Processing regions between no-fluid annotations")
-            no_fluid_frames = sorted(no_fluid_frames)
-            
-            for i in range(len(no_fluid_frames) - 1):
-                start_frame = no_fluid_frames[i]
-                end_frame = no_fluid_frames[i + 1]
-                print(f"  Found no-fluid region from {start_frame} to {end_frame}")
-                
-                # Add ALL frames in this range to clear_frames
-                for frame in range(start_frame, end_frame + 1):
-                    clear_frames.add(frame)
-                    
-                # Also mark the frames themselves as clear
-                clear_frames.add(start_frame)
-                clear_frames.add(end_frame)
-                
-                print(f"  Added {end_frame - start_frame + 1} frames to clear set")
-        
-        # Rule 5: Extend no-fluid regions by a small margin
-        margin = 5  # frames
-        extended_clear = clear_frames.copy()
-        print(f"\nRule 5: Extending no-fluid regions by {margin} frames")
-        
-        for frame in clear_frames:
-            # Add frames before
-            for i in range(max(0, frame - margin), frame):
-                if i not in clear_frames and not any(a['frame'] == i and a['type'] == 'fluid' for a in annotations):
-                    extended_clear.add(i)
-                    print(f"  Extended clear region before frame {frame} to include frame {i}")
-            
-            # Add frames after
-            for i in range(frame + 1, min(total_frames, frame + margin + 1)):
-                if i not in clear_frames and not any(a['frame'] == i and a['type'] == 'fluid' for a in annotations):
-                    extended_clear.add(i)
-                    print(f"  Extended clear region after frame {frame} to include frame {i}")
-        
-        clear_frames = extended_clear
         
         # Log summary of clear frames
         clear_ranges = []
@@ -656,17 +624,26 @@ class MultiFrameTracker:
         if end_frame - start_frame <= 1:
             return
             
-        # If either annotation is no-fluid, enforce no fluid in between
-        if current.get('is_no_fluid', False) or next_annotation.get('is_no_fluid', False):
-            self.logger.info(f"Setting frames {start_frame+1} to {end_frame-1} as clear (no-fluid constraint)")
+        # CRITICAL: If both annotations are no-fluid, enforce no fluid in between
+        if current.get('is_no_fluid', False) and next_annotation.get('is_no_fluid', False):
+            self.logger.info(f"Setting frames {start_frame} to {end_frame} as clear (no-fluid constraint)")
             empty_mask = np.zeros_like(current['mask'])
-            for frame_idx in range(start_frame + 1, end_frame):
+            
+            # Add ALL frames in this range to clear_frames and all_masks (inclusive)
+            for frame_idx in range(start_frame, end_frame + 1):
+                # Add to clear_frames set
+                clear_frames.add(frame_idx)
+                
+                # Add to all_masks with explicit no-fluid flag
                 all_masks[frame_idx] = {
                     'mask': empty_mask,
                     'type': 'predicted_clear',
                     'source': f"no_fluid_constraint_{start_frame}_to_{end_frame}",
-                    'is_annotation': False
+                    'is_annotation': False,
+                    'is_no_fluid': True  # Explicitly mark as no-fluid
                 }
+                
+            print(f"Enforced no-fluid constraint for frames {start_frame} to {end_frame}")
             return
             
         # Case 1: Fluid to Fluid - track in both directions and combine
@@ -799,11 +776,14 @@ class MultiFrameTracker:
             empty_mask = np.zeros_like(current['mask'])
             
             for frame_idx in range(start_frame + 1, end_frame):
+                # Add to both clear_frames and all_masks
+                clear_frames.add(frame_idx)
                 all_masks[frame_idx] = {
                     'mask': empty_mask,
                     'type': 'predicted_clear',
                     'source': f"between_clear_{start_frame}_and_{end_frame}",
-                    'is_annotation': False
+                    'is_annotation': False,
+                    'is_no_fluid': current.get('is_no_fluid', False) and next_annotation.get('is_no_fluid', False)  # Only propagate if both are no-fluid
                 }
 
     def _process_end_segment(self, last_annotation, clear_frames, all_masks, video_path, total_frames):
@@ -820,8 +800,30 @@ class MultiFrameTracker:
         start_frame = last_annotation['frame']
         end_frame = total_frames - 1
         
-        if last_annotation['type'] == 'clear':
-            # If last annotation is clear, all frames after it are clear
+        # CRITICAL: If last annotation is no-fluid, all remaining frames should be clear
+        if last_annotation.get('is_no_fluid', False):
+            self.logger.info(f"Setting frames {start_frame} to {end_frame} as clear (no-fluid constraint)")
+            empty_mask = np.zeros_like(last_annotation['mask'])
+            
+            # Add ALL frames in this range to clear_frames and all_masks (inclusive)
+            for frame_idx in range(start_frame, total_frames):
+                # Add to clear_frames set
+                clear_frames.add(frame_idx)
+                
+                # Add to all_masks with explicit no-fluid flag
+                all_masks[frame_idx] = {
+                    'mask': empty_mask,
+                    'type': 'predicted_clear',
+                    'source': f"no_fluid_constraint_end_{start_frame}",
+                    'is_annotation': False,
+                    'is_no_fluid': True  # Explicitly mark as no-fluid
+                }
+            
+            print(f"Enforced no-fluid constraint for frames {start_frame} to {end_frame}")
+            return
+            
+        # Handle regular clear annotation
+        elif last_annotation['type'] == 'clear':
             self.logger.info(f"Setting frames {start_frame+1} to {end_frame} as clear (no fluid)")
             empty_mask = np.zeros_like(last_annotation['mask'])
             
@@ -848,9 +850,9 @@ class MultiFrameTracker:
                         'mask': mask,
                         'type': 'predicted_fluid',
                         'source': f"forward_from_{start_frame}",
-                                                'is_annotation': False
+                        'is_annotation': False
                     }
-    
+
     def _learn_from_annotation(self, annotation, all_masks, clear_frames):
         """
         Learn from an annotation by propagating its mask to nearby frames.
