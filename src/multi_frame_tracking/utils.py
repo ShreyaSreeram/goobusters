@@ -23,74 +23,47 @@ def print_mask_stats(mask, frame_num):
 
 def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forward=True, pbar=None, flow_processor=None, recursion_depth=0, quality_threshold=0.7):
     """
-    Track a mask between frames using optical flow.
+    Track a mask between frames using GENUINE optical flow tracking.
     
-    Args:
-        cap: Video capture object
-        start_frame: Starting frame number
-        end_frame: Ending frame number
-        initial_mask: Initial mask to track
-        debug_dir: Directory for debug output
-        forward: Whether to track forward or backward
-        pbar: Progress bar object
-        flow_processor: Optical flow processor
-        recursion_depth: Current recursion depth
-        quality_threshold: Quality threshold for optical flow (lower = more permissive)
-        
-    Returns:
-        List of (frame_idx, frame, mask) tuples
+    This version fixes the blending issues and enforces pure optical flow tracking.
     """
     frames = []
     frame_idx = start_frame
     step = 1 if forward else -1
     
-    # Initialize tracking variables
+    # Tracking statistics
     total_frames_processed = 0
     total_frames_skipped = 0
     consecutive_errors = 0
-    max_consecutive_errors = 5  # Maximum number of consecutive errors before stopping
+    max_consecutive_errors = 5
+    genuine_flow_frames = 0  # Count frames with genuine optical flow
     
-    # Set up debug mode and target frames
-    DEBUG_MODE = True
-    VERBOSE_DEBUGGING = False
-    TARGET_FRAMES = set()  # Add specific frame numbers here for detailed debugging
-    
-    # Print tracking parameters
-    print(f"\nTracking parameters:")
+    print(f"\n🔬 GENUINE OPTICAL FLOW TRACKING:")
     print(f"  Start frame: {start_frame}")
     print(f"  End frame: {end_frame}")
     print(f"  Forward: {forward}")
     print(f"  Quality threshold: {quality_threshold}")
     
-    # Limit maximum range to prevent unbounded tracking
-    max_range = 100  # Maximum number of frames to track at once
-    
-    print(f"Initial frame shape: {initial_mask.shape}")
-    
-    # Set the video capture to the starting frame
+    # Set video to starting frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     ret, prev_frame = cap.read()
     if not ret:
-        print(f"Failed to read starting frame {start_frame}.")
+        print(f"❌ Failed to read starting frame {start_frame}")
         return frames
         
     try:
         prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-        mask = initial_mask.astype(float)
+        current_mask = initial_mask.astype(float)
         
-        # Save initial frame and mask for debugging
-        try:
-            if os.path.exists(debug_dir):
-                debug_path = os.path.join(debug_dir, f'initial_frame_{frame_idx:04d}.png')
-                cv2.imwrite(debug_path, prev_frame)
-                debug_path = os.path.join(debug_dir, f'initial_mask_{frame_idx:04d}.png')
-                cv2.imwrite(debug_path, (mask * 255).astype(np.uint8))
-        except Exception as e:
-            print(f"Warning: Could not save debug images: {str(e)}")
+        # Save initial state
+        if debug_dir and os.path.exists(debug_dir):
+            cv2.imwrite(os.path.join(debug_dir, f'initial_frame_{frame_idx:04d}.png'), prev_frame)
+            cv2.imwrite(os.path.join(debug_dir, f'initial_mask_{frame_idx:04d}.png'), (current_mask * 255).astype(np.uint8))
+            
     except Exception as e:
-        print(f"Error initializing first frame: {str(e)}")
+        print(f"❌ Error initializing: {str(e)}")
         return frames
-        
+    
     # Track through frames
     while (forward and frame_idx <= end_frame) or (not forward and frame_idx >= end_frame):
         if pbar:
@@ -99,112 +72,186 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
         # Read next frame
         ret, frame = cap.read()
         if not ret:
-            print(f"Failed to read frame {frame_idx}.")
+            print(f"❌ Failed to read frame {frame_idx}")
             break
             
         try:
             frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Initialize for first frame
+            # First frame - just store it
             if frame_idx == start_frame:
-                flow = None
-                flow_mask = np.zeros_like(mask)
-                adjusted_mask = np.zeros_like(mask)
-                new_mask = mask.copy()
-                print_mask_stats(mask, frame_idx)
-                frames.append((frame_idx, frame, new_mask, flow, flow_mask, adjusted_mask))
+                print(f"📌 Frame {frame_idx}: Initial frame (mask area: {np.sum(current_mask > 0.5)})")
+                
+                # Store with flow metadata
+                frames.append((
+                    frame_idx, 
+                    frame, 
+                    current_mask.copy(),
+                    None,  # No flow for first frame
+                    np.zeros_like(current_mask),  # No flow mask
+                    current_mask.copy(),  # Adjusted mask = original
+                    {  # Metadata
+                        'optical_flow_used': False,
+                        'flow_quality': 0.0,
+                        'is_initial_frame': True,
+                        'tracking_method': 'initial'
+                    }
+                ))
                 total_frames_processed += 1
+                
             else:
-                # Apply optical flow with relaxed quality threshold
+                # GENUINE OPTICAL FLOW TRACKING
+                print(f"🔄 Frame {frame_idx}: Computing optical flow...")
+                
                 try:
-                    flow = flow_processor.apply_optical_flow(prev_gray, frame_gray, mask)
+                    # Compute optical flow
+                    flow = flow_processor.apply_optical_flow(prev_gray, frame_gray, current_mask)
+                    
                     if flow is None:
-                        print(f"Flow computation returned None for frame {frame_idx}")
+                        print(f"❌ Frame {frame_idx}: Flow computation failed")
                         consecutive_errors += 1
                         total_frames_skipped += 1
-                        frame_idx += step
-                        if consecutive_errors >= max_consecutive_errors:
-                            print(f"Too many consecutive errors, stopping at frame {frame_idx}")
-                            break
-                        continue
+                    else:
+                        # Warp mask using flow
+                        flow_mask = flow_processor.warp_mask(current_mask, flow)
                         
-                    flow_mask = flow_processor.warp_mask(mask, flow)
-                    
-                    if flow_mask is None or np.isnan(flow_mask).any():
-                        print(f"Invalid flow mask at frame {frame_idx}")
-                        consecutive_errors += 1
-                        total_frames_skipped += 1
-                        frame_idx += step
-                        continue
-                    
-                    # Calculate flow quality metrics
-                    mean_flow = np.mean(np.abs(flow))
-                    flow_quality = mean_flow if mean_flow > 0.01 else 0.01
-                    
-                    # Use relaxed quality threshold
-                    if flow_quality < quality_threshold:
-                        print(f"Low flow quality ({flow_quality:.3f}) at frame {frame_idx}, but continuing with tracking")
-                    
-                    # Calculate mask metrics
-                    binary_mask = (mask > 0.5).astype(np.uint8)
-                    binary_flow_mask = (flow_mask > 0.5).astype(np.uint8)
-                    mask_area = np.sum(binary_mask)
-                    flow_mask_area = np.sum(binary_flow_mask)
-                    area_ratio = flow_mask_area / mask_area if mask_area > 0 else 0
-                    
-                    # Calculate IoU
-                    intersection = np.sum(np.logical_and(binary_mask, binary_flow_mask))
-                    union = np.sum(np.logical_or(binary_mask, binary_flow_mask))
-                    iou = intersection / union if union > 0 else 0
-                    
-                    # Blend the masks with modified weights
-                    adjusted_mask = flow_mask
-                    blended_mask = (0.5 * mask + 0.5 * adjusted_mask).astype(float)
-                    new_mask = np.clip(blended_mask, 0, 1)
-                    
-                    # Reset error counter on success
-                    consecutive_errors = 0
-                    total_frames_processed += 1
-                    
-                    # Store frame and flow
-                    frames.append((frame_idx, frame, new_mask, flow, flow_mask, adjusted_mask))
+                        if flow_mask is None or np.isnan(flow_mask).any():
+                            print(f"❌ Frame {frame_idx}: Invalid flow mask")
+                            consecutive_errors += 1
+                            total_frames_skipped += 1
+                        else:
+                            # Calculate flow quality
+                            flow_magnitude = np.sqrt(flow[:,:,0]**2 + flow[:,:,1]**2)
+                            mean_flow = np.mean(flow_magnitude[current_mask > 0.5])
+                            max_flow = np.max(flow_magnitude[current_mask > 0.5]) if np.sum(current_mask > 0.5) > 0 else 0
+                            
+                            # Calculate mask consistency metrics
+                            original_area = np.sum(current_mask > 0.5)
+                            flow_area = np.sum(flow_mask > 0.5)
+                            area_ratio = flow_area / original_area if original_area > 0 else 0
+                            
+                            # Calculate IoU between consecutive masks
+                            iou = calculate_mask_iou(current_mask, flow_mask)
+                            
+                            print(f"📊 Frame {frame_idx} Flow Analysis:")
+                            print(f"    Mean flow magnitude: {mean_flow:.3f}")
+                            print(f"    Max flow magnitude: {max_flow:.3f}")
+                            print(f"    Area ratio: {area_ratio:.3f}")
+                            print(f"    IoU with previous: {iou:.3f}")
+                            
+                            # CRITICAL: Use PURE optical flow result (no blending!)
+                            # This is the key fix - don't blend with previous mask
+                            new_mask = flow_mask.copy()
+                            
+                            # Apply quality checks
+                            flow_quality_ok = mean_flow >= quality_threshold
+                            area_ok = 0.3 <= area_ratio <= 3.0  # Reasonable area change
+                            iou_ok = iou >= 0.2  # Minimum overlap with previous frame
+                            
+                            # Determine if this is genuine tracking
+                            is_genuine = flow_quality_ok and area_ok and iou_ok
+                            
+                            if is_genuine:
+                                print(f"✅ Frame {frame_idx}: GENUINE optical flow tracking")
+                                genuine_flow_frames += 1
+                                tracking_method = 'genuine_optical_flow'
+                            else:
+                                print(f"⚠️  Frame {frame_idx}: Low quality optical flow")
+                                print(f"    Quality OK: {flow_quality_ok} (threshold: {quality_threshold})")
+                                print(f"    Area OK: {area_ok} (ratio: {area_ratio:.3f})")
+                                print(f"    IoU OK: {iou_ok} (IoU: {iou:.3f})")
+                                tracking_method = 'low_quality_optical_flow'
+                            
+                            # Store result with comprehensive metadata
+                            frames.append((
+                                frame_idx,
+                                frame,
+                                new_mask,
+                                flow,
+                                flow_mask,
+                                new_mask,  # Adjusted mask = flow mask (no blending)
+                                {  # Enhanced metadata
+                                    'optical_flow_used': True,
+                                    'flow_quality': mean_flow,
+                                    'max_flow': max_flow,
+                                    'area_ratio': area_ratio,
+                                    'iou_with_previous': iou,
+                                    'is_genuine_tracking': is_genuine,
+                                    'tracking_method': tracking_method,
+                                    'quality_checks': {
+                                        'flow_quality_ok': flow_quality_ok,
+                                        'area_ok': area_ok,
+                                        'iou_ok': iou_ok
+                                    }
+                                }
+                            ))
+                            
+                            # Update current mask for next iteration
+                            current_mask = new_mask
+                            consecutive_errors = 0
+                            total_frames_processed += 1
+                            
+                            # Save debug visualization for genuine tracking frames
+                            if debug_dir and is_genuine and frame_idx % 5 == 0:
+                                debug_viz = debug_visualize(
+                                    frame, initial_mask, flow_mask, new_mask, new_mask, 
+                                    frame_idx, flow
+                                )
+                                cv2.imwrite(
+                                    os.path.join(debug_dir, f'genuine_tracking_{frame_idx:04d}.png'), 
+                                    debug_viz
+                                )
                     
                 except Exception as e:
-                    print(f"Error processing frame {frame_idx}: {str(e)}")
+                    print(f"❌ Frame {frame_idx}: Flow processing error: {str(e)}")
                     consecutive_errors += 1
                     total_frames_skipped += 1
-                    if consecutive_errors >= max_consecutive_errors:
-                        print(f"Too many consecutive errors, stopping at frame {frame_idx}")
-                        break
             
             # Update for next iteration
             prev_gray = frame_gray
-            mask = new_mask
             
+            # Check for too many consecutive errors
+            if consecutive_errors >= max_consecutive_errors:
+                print(f"🛑 Stopping due to {consecutive_errors} consecutive errors")
+                break
+                
         except Exception as e:
-            print(f"Error processing frame {frame_idx}: {str(e)}")
+            print(f"❌ Frame {frame_idx}: Processing error: {str(e)}")
             consecutive_errors += 1
             total_frames_skipped += 1
-            if consecutive_errors >= max_consecutive_errors:
-                print(f"Too many consecutive errors, stopping at frame {frame_idx}")
-                break
-        
+            
         frame_idx += step
     
-    # Print tracking statistics
-    print(f"\nTracking statistics:")
-    print(f"  Total frames processed: {total_frames_processed}")
-    print(f"  Total frames skipped: {total_frames_skipped}")
-    
-    # Calculate success rate, handling division by zero
+    # Final statistics
     total_frames = total_frames_processed + total_frames_skipped
-    if total_frames > 0:
-        success_rate = (total_frames_processed / total_frames) * 100
-        print(f"  Success rate: {success_rate:.1f}%")
-    else:
-        print("  Success rate: N/A (no frames processed)")
+    print(f"\n📈 TRACKING STATISTICS:")
+    print(f"    Total frames processed: {total_frames_processed}")
+    print(f"    Frames with genuine optical flow: {genuine_flow_frames}")
+    print(f"    Frames skipped: {total_frames_skipped}")
+    
+    if total_frames_processed > 0:
+        genuine_rate = (genuine_flow_frames / total_frames_processed) * 100
+        success_rate = (total_frames_processed / total_frames) * 100 if total_frames > 0 else 0
+        
+        print(f"    Genuine tracking rate: {genuine_rate:.1f}%")
+        print(f"    Overall success rate: {success_rate:.1f}%")
+        
+        # Warning if genuine tracking rate is low
+        if genuine_rate < 70:
+            print(f"    ⚠️  WARNING: Low genuine tracking rate!")
+            print(f"    ⚠️  Consider adjusting quality_threshold or checking flow processor")
     
     return frames
+
+def calculate_mask_iou(mask1, mask2, threshold=0.5):
+    """Calculate IoU between two masks."""
+    binary1 = (mask1 > threshold).astype(np.uint8)
+    binary2 = (mask2 > threshold).astype(np.uint8)
+    
+    intersection = np.sum(np.logical_and(binary1, binary2))
+    union = np.sum(np.logical_or(binary1, binary2))
+    
+    return intersection / union if union > 0 else 0.0
 
 def visualize_flow(frame, flow, skip=8):
     """
@@ -612,25 +659,27 @@ import numpy as np
 
 def convert_numpy_to_python(obj):
     """
-    Convert numpy types to Python native types for JSON serialization
+    Recursively convert numpy types to native Python types for JSON serialization.
     
     Args:
-        obj: Object potentially containing numpy types
+        obj: Any Python or numpy object
         
     Returns:
-        Object with numpy types converted to Python types
+        Object with numpy types converted to Python native types
     """
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
+    if isinstance(obj, dict):
+        return {key: convert_numpy_to_python(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_to_python(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_numpy_to_python(item) for item in obj)
     elif isinstance(obj, np.integer):
         return int(obj)
     elif isinstance(obj, np.floating):
         return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
     elif isinstance(obj, np.bool_):
         return bool(obj)
-    elif isinstance(obj, dict):
-        return {key: convert_numpy_to_python(value) for key, value in obj.items()}
-    elif isinstance(obj, list) or isinstance(obj, tuple):
-        return [convert_numpy_to_python(item) for item in obj]
     else:
         return obj

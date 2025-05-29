@@ -13,6 +13,9 @@ from models.PWCNet import PWCDCNet
 
 class OpticalFlowProcessor:
     def __init__(self, method):
+        cv2.setRNGSeed(42)
+        cv2.setNumThreads(1)
+        
         self.method = method  # Stores the selected optical flow method
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.raft_model = None  # Only loaded if RAFT is chosen

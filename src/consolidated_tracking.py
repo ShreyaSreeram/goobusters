@@ -105,7 +105,7 @@ def setup_timeout_monitor(timeout_minutes=30):
     signal.alarm(timeout_minutes * 60)
     print(f"[MONITOR] Timeout monitor set for {timeout_minutes} minutes")
 
-s
+
 MULTI_FRAME_AVAILABLE = True  
 TRACKING_MODE = 'multi'  
 DEBUG_MODE = False 
@@ -622,151 +622,221 @@ def create_difference_map(frame1, frame2, flow=None):
     
     return result
 
-def calculate_tracking_metrics(single_predictions, multi_predictions, ground_truth=None):
+def calculate_tracking_metrics(algorithm_masks, ground_truth_masks):
     """
     Calculate various metrics to compare tracking approaches.
+    Fixed version to handle unhashable type errors.
     
     Args:
-        single_predictions: Dictionary of single-frame tracking predictions {frame_idx: mask}
-        multi_predictions: Dictionary of multi-frame tracking predictions {frame_idx: mask}
-        ground_truth: Optional dictionary of ground truth annotations {frame_idx: mask}
+        algorithm_masks: Dictionary of algorithm predictions {frame_idx: mask}
+        ground_truth_masks: Dictionary of ground truth annotations {frame_idx: mask}
         
     Returns:
         Dictionary of metrics
     """
+    print("\nCalculating tracking metrics...")
+    
     metrics = {
-        'single': {},
-        'multi': {}
+        'per_frame': {},
+        'summary': {}
     }
     
-    # Get all frames that have predictions from either method
-    all_frames = sorted(set(list(single_predictions.keys()) + list(multi_predictions.keys())))
+    # Ensure ground_truth_masks is a proper dictionary with integer keys
+    if isinstance(ground_truth_masks, list):
+        print("Converting ground truth list to dictionary...")
+        gt_dict = {}
+        for item in ground_truth_masks:
+            if isinstance(item, dict) and 'frameNumber' in item:
+                frame_num = int(item['frameNumber'])
+                gt_dict[frame_num] = item
+        ground_truth_masks = gt_dict
     
-    # 1. Temporal consistency (frame-to-frame IoU)
-    single_ious = []
-    multi_ious = []
+    # Convert any non-integer keys to integers
+    clean_gt_masks = {}
+    for key, value in ground_truth_masks.items():
+        try:
+            # Ensure key is an integer
+            clean_key = int(key) if not isinstance(key, int) else key
+            clean_gt_masks[clean_key] = value
+        except (ValueError, TypeError) as e:
+            print(f"Warning: Skipping invalid key {key}: {e}")
+            continue
     
-    for i in range(len(all_frames)-1):
-        curr_frame = all_frames[i]
-        next_frame = all_frames[i+1]
+    ground_truth_masks = clean_gt_masks
+    
+    # Do the same for algorithm masks
+    clean_algo_masks = {}
+    for key, value in algorithm_masks.items():
+        try:
+            clean_key = int(key) if not isinstance(key, int) else key
+            clean_algo_masks[clean_key] = value
+        except (ValueError, TypeError) as e:
+            print(f"Warning: Skipping invalid algorithm mask key {key}: {e}")
+            continue
+    
+    algorithm_masks = clean_algo_masks
+    
+    # Get all frames that have ground truth
+    ground_truth_frames = sorted(list(ground_truth_masks.keys()))
+    
+    if not ground_truth_frames:
+        print("No ground truth frames found!")
+        return metrics
         
-        # Single-frame IoU
-        if curr_frame in single_predictions and next_frame in single_predictions:
-            curr_mask = single_predictions[curr_frame]
-            next_mask = single_predictions[next_frame]
+    print(f"Found {len(ground_truth_frames)} ground truth frames")
+    print(f"Ground truth frame range: {min(ground_truth_frames)} to {max(ground_truth_frames)}")
+    print(f"Algorithm mask frames: {len(algorithm_masks)}")
+    if algorithm_masks:
+        algo_frames = sorted(list(algorithm_masks.keys()))
+        print(f"Algorithm frame range: {min(algo_frames)} to {max(algo_frames)}")
+    
+    # Calculate IoU and Dice for each frame
+    ious = []
+    dices = []
+    frames_with_high_iou = 0
+    processed_frames = 0
+    
+    for frame_idx in ground_truth_frames:
+        if frame_idx not in algorithm_masks:
+            print(f"Warning: Frame {frame_idx} missing from algorithm predictions")
+            continue
             
-            if isinstance(curr_mask, dict) and 'mask' in curr_mask:
-                curr_mask = curr_mask['mask']
-            if isinstance(next_mask, dict) and 'mask' in next_mask:
-                next_mask = next_mask['mask']
-                
-            binary_curr = (curr_mask > 0.5).astype(np.uint8)
-            binary_next = (next_mask > 0.5).astype(np.uint8)
+        # Get masks
+        algo_mask = algorithm_masks[frame_idx]
+        gt_mask = ground_truth_masks[frame_idx]
+        
+        # Handle dictionary format from MultiFrameTracker
+        if isinstance(algo_mask, dict):
+            if 'mask' in algo_mask:
+                algo_mask = algo_mask['mask']
+            elif algo_mask.get('type', '').lower() == 'clear' or algo_mask.get('is_no_fluid', False):
+                print(f"Frame {frame_idx}: Algorithm predicts no fluid")
+                # Create empty mask with same dimensions as ground truth
+                if isinstance(gt_mask, dict):
+                    if 'mask' in gt_mask:
+                        gt_shape = gt_mask['mask'].shape
+                    else:
+                        # Try to extract shape from polygon data
+                        try:
+                            if 'data' in gt_mask and 'foreground' in gt_mask['data']:
+                                # Default shape - you might need to adjust this
+                                gt_shape = (480, 640)  # Common ultrasound dimensions
+                            else:
+                                gt_shape = (480, 640)
+                        except:
+                            gt_shape = (480, 640)
+                    algo_mask = np.zeros(gt_shape, dtype=np.uint8)
+                else:
+                    algo_mask = np.zeros_like(gt_mask, dtype=np.uint8)
+        
+        # Handle ground truth format
+        if isinstance(gt_mask, dict):
+            if 'mask' in gt_mask:
+                gt_mask = gt_mask['mask']
+            elif 'data' in gt_mask and 'foreground' in gt_mask['data']:
+                # Convert polygon data to mask
+                try:
+                    foreground_data = gt_mask['data']['foreground']
+                    if foreground_data and len(foreground_data) > 0:
+                        # You'll need to implement polygon to mask conversion here
+                        # For now, let's skip this frame
+                        print(f"Frame {frame_idx}: Skipping polygon-format ground truth")
+                        continue
+                    else:
+                        # Empty ground truth
+                        gt_mask = np.zeros_like(algo_mask, dtype=np.uint8)
+                except Exception as e:
+                    print(f"Frame {frame_idx}: Error processing ground truth: {e}")
+                    continue
+            elif gt_mask.get('type', '').lower() == 'clear' or gt_mask.get('is_no_fluid', False):
+                gt_mask = np.zeros_like(algo_mask, dtype=np.uint8)
+        
+        # Ensure both masks are numpy arrays
+        if not isinstance(algo_mask, np.ndarray) or not isinstance(gt_mask, np.ndarray):
+            print(f"Frame {frame_idx}: Invalid mask format - algo: {type(algo_mask)}, gt: {type(gt_mask)}")
+            continue
+        
+        # Ensure same dimensions
+        if algo_mask.shape != gt_mask.shape:
+            print(f"Frame {frame_idx}: Shape mismatch - algo: {algo_mask.shape}, gt: {gt_mask.shape}")
+            # Try to resize
+            try:
+                if len(algo_mask.shape) == 2 and len(gt_mask.shape) == 2:
+                    import cv2
+                    algo_mask = cv2.resize(algo_mask, (gt_mask.shape[1], gt_mask.shape[0]))
+            except:
+                print(f"Frame {frame_idx}: Could not resize masks, skipping")
+                continue
+        
+        # Convert to binary masks
+        try:
+            algo_binary = (algo_mask > 0.5).astype(np.uint8)
+            gt_binary = (gt_mask > 0.5).astype(np.uint8)
+        except Exception as e:
+            print(f"Frame {frame_idx}: Error converting to binary: {e}")
+            continue
+        
+        # Calculate metrics
+        try:
+            iou = calculate_iou(algo_binary, gt_binary)
+            dice = calculate_dice(algo_binary, gt_binary)
             
-            intersection = np.sum(np.logical_and(binary_curr, binary_next))
-            union = np.sum(np.logical_or(binary_curr, binary_next))
-            iou = intersection / union if union > 0 else 0
-            single_ious.append(iou)
-        
-        # Multi-frame IoU
-        if curr_frame in multi_predictions and next_frame in multi_predictions:
-            curr_mask = multi_predictions[curr_frame]
-            next_mask = multi_predictions[next_frame]
+            if np.isnan(iou) or np.isnan(dice):
+                print(f"Frame {frame_idx}: NaN metrics detected, skipping")
+                continue
             
-            if isinstance(curr_mask, dict) and 'mask' in curr_mask:
-                curr_mask = curr_mask['mask']
-            if isinstance(next_mask, dict) and 'mask' in next_mask:
-                next_mask = next_mask['mask']
-                
-            binary_curr = (curr_mask > 0.5).astype(np.uint8)
-            binary_next = (next_mask > 0.5).astype(np.uint8)
+            ious.append(iou)
+            dices.append(dice)
+            processed_frames += 1
             
-            intersection = np.sum(np.logical_and(binary_curr, binary_next))
-            union = np.sum(np.logical_or(binary_curr, binary_next))
-            iou = intersection / union if union > 0 else 0
-            multi_ious.append(iou)
-    
-    metrics['single']['temporal_consistency'] = np.mean(single_ious) if single_ious else 0
-    metrics['multi']['temporal_consistency'] = np.mean(multi_ious) if multi_ious else 0
-    
-    # 2. Number of prediction failures (frames where method produced no prediction)
-    single_fail_count = sum(1 for frame in all_frames if frame not in single_predictions)
-    multi_fail_count = sum(1 for frame in all_frames if frame not in multi_predictions)
-    
-    metrics['single']['failure_count'] = single_fail_count
-    metrics['multi']['failure_count'] = multi_fail_count
-    
-    # 3. Ground truth IoU 
-    if ground_truth:
-        single_gt_ious = []
-        multi_gt_ious = []
-        
-        for frame in all_frames:
-            if frame in ground_truth:
-                gt_mask = ground_truth[frame]
-                if isinstance(gt_mask, dict) and 'mask' in gt_mask:
-                    gt_mask = gt_mask['mask']
-                binary_gt = (gt_mask > 0.5).astype(np.uint8)
+            if iou > 0.7:
+                frames_with_high_iou += 1
                 
-                # Single-frame IoU with ground truth
-                if frame in single_predictions:
-                    mask = single_predictions[frame]
-                    if isinstance(mask, dict) and 'mask' in mask:
-                        mask = mask['mask']
-                    binary_mask = (mask > 0.5).astype(np.uint8)
-                    
-                    intersection = np.sum(np.logical_and(binary_gt, binary_mask))
-                    union = np.sum(np.logical_or(binary_gt, binary_mask))
-                    iou = intersection / union if union > 0 else 0
-                    single_gt_ious.append(iou)
+            # Store per-frame metrics
+            metrics['per_frame'][frame_idx] = {
+                'iou': float(iou),
+                'dice': float(dice)
+            }
+            
+            # Print progress for some frames
+            if processed_frames <= 10 or processed_frames % 10 == 0:
+                print(f"Frame {frame_idx}: IoU = {iou:.4f}, Dice = {dice:.4f}")
                 
-                # Multi-frame IoU with ground truth
-                if frame in multi_predictions:
-                    mask = multi_predictions[frame]
-                    if isinstance(mask, dict) and 'mask' in mask:
-                        mask = mask['mask']
-                    binary_mask = (mask > 0.5).astype(np.uint8)
-                    
-                    intersection = np.sum(np.logical_and(binary_gt, binary_mask))
-                    union = np.sum(np.logical_or(binary_gt, binary_mask))
-                    iou = intersection / union if union > 0 else 0
-                    multi_gt_ious.append(iou)
+        except Exception as e:
+            print(f"Frame {frame_idx}: Error calculating metrics: {e}")
+            continue
+    
+    # Calculate summary metrics
+    if ious and len(ious) > 0:
+        metrics['summary'] = {
+            'mean_iou': float(np.mean(ious)),
+            'median_iou': float(np.median(ious)),
+            'mean_dice': float(np.mean(dices)),
+            'median_dice': float(np.median(dices)),
+            'frames_with_iou_over_0.7': float(frames_with_high_iou / len(ious)) if len(ious) > 0 else 0.0,
+            'total_frames_evaluated': len(ious),
+            'total_ground_truth_frames': len(ground_truth_frames),
+            'processed_frames': processed_frames
+        }
         
-        metrics['single']['gt_iou'] = np.mean(single_gt_ious) if single_gt_ious else 0
-        metrics['multi']['gt_iou'] = np.mean(multi_gt_ious) if multi_gt_ious else 0
-    
-    # 4. Mask area stability (standard deviation of mask areas)
-    single_areas = []
-    multi_areas = []
-    
-    for frame in all_frames:
-        # Single-frame mask area
-        if frame in single_predictions:
-            mask = single_predictions[frame]
-            if isinstance(mask, dict) and 'mask' in mask:
-                mask = mask['mask']
-            binary_mask = (mask > 0.5).astype(np.uint8)
-            single_areas.append(np.sum(binary_mask))
-        
-        # Multi-frame mask area
-        if frame in multi_predictions:
-            mask = multi_predictions[frame]
-            if isinstance(mask, dict) and 'mask' in mask:
-                mask = mask['mask']
-            binary_mask = (mask > 0.5).astype(np.uint8)
-            multi_areas.append(np.sum(binary_mask))
-    
-    # Calculate mean and std of areas
-    single_mean_area = np.mean(single_areas) if single_areas else 0
-    multi_mean_area = np.mean(multi_areas) if multi_areas else 0
-    
-    # Calculate normalised std dev (std / mean) to compare stability regardless of mask size
-    metrics['single']['area_stability'] = (np.std(single_areas) / single_mean_area) if single_mean_area > 0 else 0
-    metrics['multi']['area_stability'] = (np.std(multi_areas) / multi_mean_area) if multi_mean_area > 0 else 0
-    
-    # Lower value is better (less fluctuation)
-    metrics['single']['area_stability'] = 1 - metrics['single']['area_stability']
-    metrics['multi']['area_stability'] = 1 - metrics['multi']['area_stability']
+        print("\nFinal Metrics:")
+        print(f"Processed frames: {processed_frames}")
+        print(f"Mean IoU: {metrics['summary']['mean_iou']:.4f}")
+        print(f"Mean Dice: {metrics['summary']['mean_dice']:.4f}")
+        print(f"Frames with IoU > 0.7: {metrics['summary']['frames_with_iou_over_0.7']*100:.1f}%")
+    else:
+        print("WARNING: No valid metrics could be calculated")
+        metrics['summary'] = {
+            'mean_iou': 0.0,
+            'median_iou': 0.0,
+            'mean_dice': 0.0,
+            'median_dice': 0.0,
+            'frames_with_iou_over_0.7': 0.0,
+            'total_frames_evaluated': 0,
+            'total_ground_truth_frames': len(ground_truth_frames),
+            'processed_frames': processed_frames,
+            'error': 'No valid metrics could be calculated'
+        }
     
     return metrics
 
@@ -1581,7 +1651,7 @@ def process_video_with_multi_frame_tracking_enhanced(video_path, annotations_df,
         mdai_client: MD.ai client for uploads
         label_id_fluid: Label ID for fluid annotation
         label_id_no_fluid: Label ID for no fluid annotation
-        label_id_machine: Label ID for machine group
+        label_id_machine: Label ID for the machine group
         project_id: MD.ai project ID
         dataset_id: MD.ai dataset ID
         upload_to_mdai: Whether to upload to MD.ai
@@ -2208,85 +2278,61 @@ def preprocess_ground_truth_annotations(ground_truth_annotations, video_path, st
     
     return gt_df
 
-def preprocess_ground_truth_for_tracker(ground_truth_annotations, video_path, study_uid, series_uid, feedback_loop=True):
+def preprocess_ground_truth_for_tracker(ground_truth_annotations, video_path, study_uid, series_uid, feedback_loop=True, input_sampling_rate=10):
     """
-    Transform ground truth annotations for MultiFrameTracker
-    
-    In feedback loop mode, this treats ground truth as INPUT DATA (not final annotations)
-    by changing the label ID to match free fluid annotations.
+    Apply the same preprocessing to ground truth that normal annotations get
     
     Args:
-        ground_truth_annotations: List of ground truth annotation dicts from MD.ai
+        ground_truth_annotations: List of ground truth annotations
         video_path: Path to the video file
-        study_uid: Study Instance UID
-        series_uid: Series Instance UID
-        feedback_loop: If True, treats ground truth as input data (for feedback loop)
-    
-    Returns:
-        DataFrame with transformed annotations
+        study_uid: Study instance UID
+        series_uid: Series instance UID
+        feedback_loop: Whether this is being used in feedback loop mode
+        input_sampling_rate: Take every Nth frame as INPUT for tracking (NOT for evaluation)
     """
-    print("Transforming ground truth annotations for MultiFrameTracker...")
-    print(f"Feedback loop mode: {feedback_loop}")
+    print("Preprocessing ground truth annotations...")
     
-    transformed_annotations = []
+    # Convert list of annotation dicts to DataFrame
+    gt_df = pd.DataFrame(ground_truth_annotations)
     
-    for annotation in ground_truth_annotations:
-        try:
-            frame_number = annotation.get('frameNumber')
-            if frame_number is None:
-                continue
-            
-            # Check if this is a no-fluid annotation
-            label_id = annotation.get('labelId')
-            is_no_fluid = label_id == os.getenv('LABEL_ID_NO_FLUID')
-            
-            # Extract polygon data from the MD.ai format
-            data = annotation.get('data', {})
-            foreground_polygons = data.get('foreground', [])
-            
-            # Process both fluid and no-fluid annotations
-            if is_no_fluid or (foreground_polygons and len(foreground_polygons) > 0):
-                # In feedback loop mode, use FREE FLUID label
-                # This makes the tracker treat ground truth as INPUT data for learning
-                if feedback_loop:
-                    label_id = 'L_13yPql'  # FREE FLUID label (not ground truth label)
-                    print(f"✓ Transformed GT frame {frame_number} as {'no-fluid' if is_no_fluid else 'fluid'} input")
-                else:
-                    # In normal mode: preserve original label
-                    label_id = annotation.get('labelId')
-                    print(f"✓ Transformed frame {frame_number} with original label {label_id}")
-                
-                # Create annotation row in the format MultiFrameTracker expects
-                row = {
-                    'StudyInstanceUID': study_uid,
-                    'SeriesInstanceUID': series_uid,
-                    'frameNumber': frame_number,
-                    'labelId': label_id,  # This is the key change!
-                    'free_fluid_foreground': [] if is_no_fluid else foreground_polygons,  # Empty list for no-fluid
-                    'video_path': video_path,
-                    'height': annotation.get('height'),
-                    'width': annotation.get('width'),
-                    'is_no_fluid': is_no_fluid  # Add flag for no-fluid frames
-                }
-                transformed_annotations.append(row)
-            else:
-                print(f"✗ Skipping frame {frame_number} (no valid annotation data)")
-                
-        except Exception as e:
-            print(f"Error transforming annotation: {e}")
-            continue
+    # Extract foreground data (same as before)
+    def extract_foreground(row):
+        if 'data' in row and isinstance(row['data'], dict):
+            return row['data'].get('foreground', [])
+        return []
     
-    # Convert to DataFrame
-    transformed_df = pd.DataFrame(transformed_annotations)
+    gt_df['data_foreground'] = gt_df.apply(extract_foreground, axis=1)
+    gt_df.rename(columns={'data_foreground': 'free_fluid_foreground'}, inplace=True)
     
-    if len(transformed_df) > 0:
-        print(f"\nTransformed {len(transformed_df)} annotations:")
-        print(f"- Fluid frames: {len(transformed_df[~transformed_df['is_no_fluid']])}")
-        print(f"- No-fluid frames: {len(transformed_df[transformed_df['is_no_fluid']])}")
-    else:
-        print("No annotations were transformed!")
+    # Add video path and other required fields
+    gt_df['video_path'] = video_path
+    gt_df['StudyInstanceUID'] = study_uid
+    gt_df['SeriesInstanceUID'] = series_uid
+    
+    # Filter out annotations without valid foreground data
+    gt_df = gt_df[gt_df['free_fluid_foreground'].apply(lambda x: x and len(x) > 0)]
+    
+    # CRITICAL: Apply input sampling for sparse INPUT testing
+    if feedback_loop and input_sampling_rate > 1:
+        # Sort by frame number
+        gt_df = gt_df.sort_values('frameNumber')
+        frame_numbers = gt_df['frameNumber'].unique()
         
-    return transformed_df
+        # Take every Nth frame for INPUT
+        sampled_frames = frame_numbers[::input_sampling_rate]
+        print(f"\n🔍 INPUT SAMPLING DEBUG:")
+        print(f"Input sampling rate: {input_sampling_rate}")
+        print(f"Original frames available: {len(frame_numbers)}")
+        print(f"Frames given to tracker as INPUT: {len(sampled_frames)}")
+        print(f"Input frame numbers: {sorted(sampled_frames)}")
+        print(f"Average gap between input frames: {np.mean(np.diff(sorted(sampled_frames))):.1f}")
+        
+        # Filter to only use sampled frames as input
+        gt_df = gt_df[gt_df['frameNumber'].isin(sampled_frames)]
+    
+    print(f"Final preprocessed annotations for tracker INPUT: {len(gt_df)}")
+    
+    return gt_df
 
 def extract_algorithm_masks_for_evaluation(algorithm_masks, ground_truth_masks):
     """
@@ -2573,13 +2619,85 @@ def extract_algorithm_masks_only(algorithm_masks, ground_truth_indices=None):
     print("=== END ENHANCED ALGORITHM MASK EXTRACTION ===\n")
     
     return algorithm_masks_clean
+def create_sparse_annotations(ground_truth_annotations, sampling_rate=10, min_frames=1):
+    """
+    Create a sparse subset of annotations by sampling frames at regular intervals.
+    
+    Args:
+        ground_truth_annotations: Original ground truth annotations (list or dictionary)
+        sampling_rate: Take every Nth frame (default: 10)
+        min_frames: Minimum number of frames to include (default: 1)
+        
+    Returns:
+        Tuple of (sparse_annotations, sampling_info)
+        - sparse_annotations: Dictionary of sampled annotations
+        - sampling_info: Dictionary containing sampling statistics
+    """
+    if not ground_truth_annotations:
+        return {}, {"error": "No annotations provided"}
+        
+    print(f"\n=== CREATING SPARSE ANNOTATIONS (sampling rate: {sampling_rate}) ===")
+    
+    # Convert list to dictionary if needed
+    if isinstance(ground_truth_annotations, list):
+        # Create dictionary with frame numbers as keys
+        annotations_dict = {}
+        for ann in ground_truth_annotations:
+            frame_num = int(ann.get('frameNumber', 0))
+            if frame_num not in annotations_dict:
+                annotations_dict[frame_num] = ann
+        ground_truth_annotations = annotations_dict
+    
+    # Get all frame indices
+    frame_indices = sorted(list(ground_truth_annotations.keys()))
+    total_frames = len(frame_indices)
+    
+    # Calculate step size based on sampling rate
+    step = sampling_rate
+    
+    # Sample frames
+    sampled_indices = frame_indices[::step]
+    
+    # Ensure we have at least min_frames
+    if len(sampled_indices) < min_frames:
+        print(f"Warning: Sampling rate {sampling_rate} would result in fewer than {min_frames} frames.")
+        print(f"Adjusting sampling to ensure {min_frames} frames are included.")
+        step = max(1, total_frames // min_frames)
+        sampled_indices = frame_indices[::step]
+    
+    # Create sparse annotations dictionary
+    sparse_annotations = {idx: ground_truth_annotations[idx] for idx in sampled_indices}
+    
+    # Create sampling information
+    sampling_info = {
+        "total_frames": total_frames,
+        "sampled_frames": len(sparse_annotations),
+        "sampling_rate": sampling_rate,
+        "actual_step_size": step,
+        "sampled_frame_numbers": sorted(list(sparse_annotations.keys())),
+        "sampling_percentage": (len(sparse_annotations) / total_frames) * 100
+    }
+    
+    print("\nSampling Summary:")
+    print(f"Total frames available: {total_frames}")
+    print(f"Frames sampled: {len(sparse_annotations)}")
+    print(f"Sampling rate used: {sampling_rate}")
+    print(f"Actual step size: {step}")
+    print(f"Sampled frame numbers: {sorted(list(sparse_annotations.keys()))}")
+    print(f"Sampling percentage: {sampling_info['sampling_percentage']:.1f}%")
+    
+    return sparse_annotations, sampling_info
+
 
 def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processor, output_dir,
                                  mdai_client, project_id, dataset_id, ground_truth_label_id,
                                  algorithm_label_id, label_id_no_fluid=None, 
                                  label_id_machine=None, annotations_json=None, args=None,
                                  shared_params=None, learning_mode=False, iteration_number=1,
-                                 use_genuine_evaluation=False, sampling_rate=10): 
+                                 use_genuine_evaluation=False, 
+                                 sampling_rate=10,              # ADD THIS LINE
+                                 input_sampling_rate=None,      # ADD THIS LINE
+                                 evaluation_sampling_rate=None): # ADD THIS LINE
     """
     Evaluates the algorithm against expert-refined ground truth annotations
     with support for iterative learning and feedback loop
@@ -2592,21 +2710,30 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
         mdai_client: MD.ai client
         project_id: MD.ai project ID
         dataset_id: MD.ai dataset ID
-        ground_truth_label_id: Label ID for ground truth annotations (your corrected annotations)
-        algorithm_label_id: Label ID for algorithm annotations (LABEL_ID_FLUID_OF)
+        ground_truth_label_id: Label ID for ground truth annotations
+        algorithm_label_id: Label ID for algorithm annotations
         label_id_no_fluid: Label ID for "no fluid" annotations
         label_id_machine: Label ID for the machine group
         annotations_json: Path to annotations JSON file
-        args: Command line arguments (for checking no_upload flag)
+        args: Command line arguments
         shared_params: SharedParams object for tracking parameters
         learning_mode: Whether to enable learning from corrections
         iteration_number: Current iteration number in the feedback loop
-        use_genuine_evaluation: Whether to use the genuine evaluation approach with sparse annotations
-        sampling_rate: Sampling rate for sparse annotations (take every Nth frame)
+        use_genuine_evaluation: Whether to use the genuine evaluation approach
+        sampling_rate: Legacy sampling rate (for backward compatibility)
+        input_sampling_rate: Sampling rate for tracker INPUT
+        evaluation_sampling_rate: Sampling rate for evaluation
         
     Returns:
         Dictionary with evaluation results
     """
+    
+    # Handle parameter compatibility
+    if input_sampling_rate is None:
+        input_sampling_rate = sampling_rate
+    if evaluation_sampling_rate is None:
+        evaluation_sampling_rate = 1  # Default to dense evaluation
+
     # Debug output at the beginning
     print("\n" + "="*60)
     print("=== LABEL ID DEBUG IN evaluate_with_expert_feedback ===")
@@ -2871,7 +2998,10 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             # Run the algorithm to generate new predictions
             print("Running algorithm to generate new predictions...")
             annotations_df = preprocess_ground_truth_for_tracker(
-                ground_truth_annotations, video_path, study_uid, series_uid)
+                ground_truth_annotations, video_path, study_uid, series_uid, feedback_loop= True, input_sampling_rate=input_sampling_rate)
+            
+            print(f"🔍 After preprocessing: DataFrame has {len(annotations_df)} rows")
+            print(f"🔍 Input sampling rate used: {input_sampling_rate}")
             
             # Initialize the multi-frame tracker with feedback loop settings
             tracker = MultiFrameTracker(flow_processor, video_output_dir, debug_mode=False, shared_params=shared_params)
@@ -3033,59 +3163,56 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 else:
                     print("No algorithm masks generated")
             
-            # Fix evaluation to properly extract masks - ALGORITHM ONLY
-            print("\n=== EXTRACTING MASKS FOR EVALUATION ===")
-            # Pass ground truth indices to help with proper frame mapping
-            ground_truth_indices = list(ground_truth_masks.keys()) if ground_truth_masks else None
+            # DATA LEAKAGE CHECK - NEW SECTION
+            print("\n🔍 DATA LEAKAGE CHECK:")
+            annotation_frames = []
+            prediction_frames = []
+            for frame_idx, mask_info in algorithm_masks.items():
+                if isinstance(mask_info, dict):
+                    if mask_info.get('is_annotation', False):
+                        annotation_frames.append(frame_idx)
+                    else:
+                        prediction_frames.append(frame_idx)
+            print(f"Frames marked as 'annotation' (memorized): {len(annotation_frames)}")
+            print(f"Frames marked as 'prediction' (tracked): {len(prediction_frames)}")
             
-            # SUPER AGGRESSIVE MODE: Force algorithm masks to match ground truth frames exactly
-            print("Using SUPER AGGRESSIVE ground truth frame alignment")
-            if algorithm_masks and ground_truth_masks:
-                # First use our advanced extraction function
-                algorithm_masks_clean = extract_algorithm_masks_only(algorithm_masks, ground_truth_indices)
+            # Check if evaluation is using memorized data
+            gt_frames = set(ground_truth_masks.keys())
+            annotation_frame_set = set(annotation_frames)
+            overlap = gt_frames & annotation_frame_set
+            print(f"⚠️  Overlap between ground truth and memorized frames: {len(overlap)}/{len(gt_frames)}")
+            if len(overlap) > 0:
+                print("🚨 DATA LEAKAGE DETECTED: Excluding memorized frames from evaluation!")
+            
+            # EXTRACT MASKS FOR EVALUATION (EXCLUDING MEMORIZED FRAMES) - UPDATED SECTION
+            print("\n=== EXTRACTING MASKS FOR EVALUATION (EXCLUDING MEMORIZED FRAMES) ===")
+            
+            # Extract only PREDICTED masks (exclude memorized annotations)
+            algorithm_masks_clean = {}
+            for frame_idx, mask_info in algorithm_masks.items():
+                # CRITICAL: Skip frames that were used as input annotations
+                if isinstance(mask_info, dict) and mask_info.get('is_annotation', False):
+                    print(f"Excluding memorized frame {frame_idx} from evaluation")
+                    continue
                 
-                # Now ensure ALL ground truth frames are covered
-                gt_frames_set = set(ground_truth_masks.keys())
-                algo_frames_set = set(algorithm_masks_clean.keys())
+                # Extract the actual predicted mask
+                if isinstance(mask_info, dict):
+                    mask = mask_info.get('mask')
+                    if mask is None:
+                        continue
+                else:
+                    mask = mask_info
                 
-                # Find frames that are in ground truth but not in algorithm masks
-                missing_frames = gt_frames_set - algo_frames_set
-                if missing_frames:
-                    print(f"Still missing {len(missing_frames)} ground truth frames after extraction")
-                    print(f"Examples of missing frames: {sorted(list(missing_frames))[:10]}")
-                    
-                    # For each missing frame, find the closest algorithm frame
-                    for missing_frame in sorted(missing_frames):
-                        # First check if we have the frame in the original algorithm masks
-                        if missing_frame in algorithm_masks:
-                            mask_source = algorithm_masks[missing_frame]
-                            if isinstance(mask_source, dict) and 'mask' in mask_source:
-                                algorithm_masks_clean[missing_frame] = mask_source['mask']
-                                print(f"✅ Found missing frame {missing_frame} in original algorithm masks")
-                                continue
-                        
-                        # Find closest frame with content in algorithm_masks_clean
-                        closest_frame = None
-                        min_distance = float('inf')
-                        for algo_frame in algorithm_masks_clean.keys():
-                            distance = abs(algo_frame - missing_frame)
-                            if distance < min_distance:
-                                min_distance = distance
-                                closest_frame = algo_frame
-                        
-                        # If we found a close frame, use its mask
-                        if closest_frame is not None and min_distance <= 10:
-                            algorithm_masks_clean[missing_frame] = algorithm_masks_clean[closest_frame].copy()
-                            print(f"✅ Added missing frame {missing_frame} using closest frame {closest_frame}")
-                
-                # Final verification of ground truth frame coverage
-                final_coverage = set(algorithm_masks_clean.keys()) & gt_frames_set
-                print(f"Final ground truth frame coverage: {len(final_coverage)}/{len(gt_frames_set)} frames ({len(final_coverage)/len(gt_frames_set):.1%})")
-            else:
-                algorithm_masks_clean = {}
-                print("No algorithm masks or ground truth masks provided")
-                
+                if isinstance(mask, np.ndarray):
+                    algorithm_masks_clean[frame_idx] = mask
+            
+            print(f"Extracted {len(algorithm_masks_clean)} PREDICTED masks for evaluation")
+            print(f"Excluded {len(annotation_frames)} memorized frames from evaluation")
             ground_truth_masks_clean = ground_truth_masks  # Keep ground truth as is
+            
+            # Find common frames for evaluation (excluding memorized frames)
+            common_frames = set(algorithm_masks_clean.keys()) & set(ground_truth_masks_clean.keys())
+            print(f"Common frames for GENUINE evaluation: {len(common_frames)}")
 
             print("\n=== GROUND TRUTH FRAMES ===")
             gt_frames = sorted(list(ground_truth_masks_clean.keys()))
@@ -3096,10 +3223,6 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             algo_frames = sorted(list(algorithm_masks_clean.keys()))
             print(f"Algorithm frames: {len(algorithm_masks_clean)} total")
             print(f"Sample frames: {algo_frames[:10]}... to ...{algo_frames[-10:]}")
-            
-            # Find common frames for evaluation
-            common_frames = set(algorithm_masks_clean.keys()) & set(ground_truth_masks_clean.keys())
-            print(f"Common frames for evaluation: {len(common_frames)}")
 
             # Try additional offsets if needed
             if len(common_frames) < min(len(algorithm_masks_clean), len(ground_truth_masks_clean)) // 2:
@@ -3109,7 +3232,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                   common_with_offset = set(shifted_algo.keys()) & set(ground_truth_masks_clean.keys())
                   print(f"  With offset {offset}: {len(common_with_offset)} common frames")
         
-        # If a better match is found, update the algorithm masks
+                  # If a better match is found, update the algorithm masks
                   if len(common_with_offset) > len(common_frames):
                      print(f"  Found better match with offset {offset}")
                      algorithm_masks_clean = shifted_algo
@@ -3117,7 +3240,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             
             # Decide which evaluation approach to use
             if use_genuine_evaluation:
-                print("\n=== USING GENUINE EVALUATION WITH SPARSE ANNOTATIONS ===")
+                print("\n=== USING GENUINE EVALUATION WITH SPARSE ANNOTATIONS (NO DATA LEAKAGE) ===")
                 genuine_output_dir = os.path.join(video_output_dir, "genuine_evaluation")
                 os.makedirs(genuine_output_dir, exist_ok=True)
                 
@@ -3127,33 +3250,81 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 os.makedirs(ground_truth_dir, exist_ok=True)
                 os.makedirs(algorithm_dir, exist_ok=True)
                 
-                # Save ground truth and algorithm masks as images
-                print("Saving masks for genuine evaluation...")
-                for frame_idx, gt_mask in ground_truth_masks_clean.items():
-                    # Handle no-fluid frames
-                    if isinstance(gt_mask, dict) and gt_mask.get('is_no_fluid', False):
-                        # For no-fluid frames, save an empty mask
-                        mask = np.zeros((video_height, video_width), dtype=np.uint8)
-                    else:
-                        mask = (gt_mask > 0.5).astype(np.uint8) * 255
-                    
-                    mask_path = os.path.join(ground_truth_dir, f"{int(frame_idx):04d}.png")
-                    cv2.imwrite(mask_path, mask)
-                    print(f"Saved ground truth mask for frame {frame_idx} (no fluid: {isinstance(gt_mask, dict) and gt_mask.get('is_no_fluid', False)})")
+                # Get frame indices and apply sampling (ONLY ON PREDICTED FRAMES)
+                gt_frames = sorted(list(ground_truth_masks_clean.keys()))
+                algo_frames = sorted(list(algorithm_masks_clean.keys()))  # These are now prediction-only
+                common_frames_for_sampling = sorted(list(set(gt_frames) & set(algo_frames)))
                 
-                for frame_idx, algo_mask in algorithm_masks_clean.items():
-                    # Handle no-fluid frames
-                    if isinstance(algo_mask, dict):
-                        if algo_mask.get('is_no_fluid', False) or 'clear' in algo_mask.get('type', '').lower():
-                            mask = np.zeros((video_height, video_width), dtype=np.uint8)
-                        else:
-                            mask = (algo_mask['mask'] > 0.5).astype(np.uint8) * 255
-                    else:
-                        mask = (algo_mask > 0.5).astype(np.uint8) * 255
+                print(f"Ground truth masks available: {len(ground_truth_masks_clean)}")
+                print(f"Algorithm PREDICTED masks available: {len(algorithm_masks_clean)}")
+                print(f"Common frames before sampling: {len(common_frames_for_sampling)}")
+                print(f"Evaluation sampling rate: {evaluation_sampling_rate}")
+                
+                # Apply sampling rate logic for evaluation
+                if evaluation_sampling_rate > 1 and len(common_frames_for_sampling) > evaluation_sampling_rate:
+                    sampled_frames = common_frames_for_sampling[::evaluation_sampling_rate]
                     
-                    mask_path = os.path.join(algorithm_dir, f"{int(frame_idx):04d}.png")
-                    cv2.imwrite(mask_path, mask)
-                    print(f"Saved algorithm mask for frame {frame_idx} (no fluid: {isinstance(algo_mask, dict) and (algo_mask.get('is_no_fluid', False) or 'clear' in algo_mask.get('type', '').lower())})")
+                    # Always include first and last frame
+                    if common_frames_for_sampling[0] not in sampled_frames:
+                        sampled_frames.insert(0, common_frames_for_sampling[0])
+                    if common_frames_for_sampling[-1] not in sampled_frames:
+                        sampled_frames.append(common_frames_for_sampling[-1])
+                    
+                    sampled_frames = sorted(list(set(sampled_frames)))
+                    print(f"Frames after evaluation sampling (rate {evaluation_sampling_rate}): {len(sampled_frames)}")
+                    print(f"Selected frames for evaluation: {sampled_frames}")
+                else:
+                    sampled_frames = common_frames_for_sampling
+                    print(f"Using all frames for evaluation (sampling rate {evaluation_sampling_rate} >= frame count or rate = 1)")
+                
+                # Save masks for the sampled frames only
+                print("Saving masks for genuine evaluation...")
+                saved_gt_count = 0
+                saved_algo_count = 0
+                
+                for frame_idx in sampled_frames:
+                    try:
+                        # Save ground truth mask
+                        if frame_idx in ground_truth_masks_clean:
+                            gt_mask = ground_truth_masks_clean[frame_idx]
+                            
+                            # Handle no-fluid frames
+                            if isinstance(gt_mask, dict) and gt_mask.get('is_no_fluid', False):
+                                mask = np.zeros((video_height, video_width), dtype=np.uint8)
+                            elif isinstance(gt_mask, dict) and 'mask' in gt_mask:
+                                mask = (gt_mask['mask'] > 0.5).astype(np.uint8) * 255
+                            else:
+                                mask = (gt_mask > 0.5).astype(np.uint8) * 255
+                            
+                            mask_path = os.path.join(ground_truth_dir, f"{int(frame_idx):04d}.png")
+                            cv2.imwrite(mask_path, mask)
+                            saved_gt_count += 1
+                        
+                        # Save algorithm mask (PREDICTED ONLY)
+                        if frame_idx in algorithm_masks_clean:
+                            algo_mask = algorithm_masks_clean[frame_idx]
+                            
+                            # Handle different mask formats
+                            if isinstance(algo_mask, dict):
+                                if algo_mask.get('is_no_fluid', False) or 'clear' in algo_mask.get('type', '').lower():
+                                    mask = np.zeros((video_height, video_width), dtype=np.uint8)
+                                elif 'mask' in algo_mask:
+                                    mask = (algo_mask['mask'] > 0.5).astype(np.uint8) * 255
+                                else:
+                                    mask = np.zeros((video_height, video_width), dtype=np.uint8)
+                            else:
+                                mask = (algo_mask > 0.5).astype(np.uint8) * 255
+                            
+                            mask_path = os.path.join(algorithm_dir, f"{int(frame_idx):04d}.png")
+                            cv2.imwrite(mask_path, mask)
+                            saved_algo_count += 1
+                            
+                    except Exception as e:
+                        print(f"Error saving masks for frame {frame_idx}: {str(e)}")
+                        continue
+                
+                print(f"Saved {saved_gt_count} ground truth masks")
+                print(f"Saved {saved_algo_count} algorithm PREDICTED masks")
                 
                 # Import the evaluation function directly
                 from src.validation.sparse_validation import create_sparse_validation_set
@@ -3168,7 +3339,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     genuine_results = create_sparse_validation_set(
                         ground_truth_dir=ground_truth_dir,
                         algorithm_results_dir=algorithm_dir,
-                        num_frames=sampling_rate,
+                        num_frames=evaluation_sampling_rate,
                         output_dir=genuine_output_dir
                     )
                     
@@ -3194,23 +3365,52 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 
                 # Add genuine evaluation details to results
                 evaluation_results[f"{study_uid}_{series_uid}_genuine"] = genuine_results
-                print(f"Genuine evaluation completed with sampling rate {sampling_rate}")
+                print(f"Genuine evaluation completed with sampling rate {evaluation_sampling_rate}")
             
-            # Also run standard evaluation
+            # STANDARD EVALUATION (UPDATED)
             if common_frames:
-                algo_subset = {f: algorithm_masks_clean[f] for f in common_frames}
-                gt_subset = {f: ground_truth_masks_clean[f] for f in common_frames}
+                # Create algorithm and ground truth subsets (PREDICTED FRAMES ONLY)
+                algo_subset = {}
+                gt_subset = {}
                 
+                print(f"Creating evaluation subsets from {len(common_frames)} common PREDICTED frames")
+                
+                for frame_idx in common_frames:
+                    # Get algorithm mask (these are now prediction-only)
+                    algo_mask = algorithm_masks_clean[frame_idx]
+                    if isinstance(algo_mask, dict) and 'mask' in algo_mask:
+                        algo_subset[frame_idx] = algo_mask['mask']
+                    else:
+                        algo_subset[frame_idx] = algo_mask
+                    
+                    # Get ground truth mask
+                    gt_mask = ground_truth_masks_clean[frame_idx]
+                    if isinstance(gt_mask, dict) and 'mask' in gt_mask:
+                        gt_subset[frame_idx] = gt_mask['mask']
+                    else:
+                        gt_subset[frame_idx] = gt_mask
+                
+                print(f"Evaluating on {len(algo_subset)} PREDICTED frames (no memorized data)")
                 metrics = evaluate_with_iou(algo_subset, gt_subset)
-                print(f"Standard evaluation completed on {len(common_frames)} frames")
+                print(f"GENUINE evaluation completed on {len(common_frames)} predicted frames")
             else:
-                print("No common frames found for standard evaluation!")
+                print("No common PREDICTED frames found for evaluation!")
                 metrics = {
                     'mean_iou': 0.0,
                     'median_iou': 0.0,
                     'mean_dice': 0.0,
                     'iou_over_0.7': 0.0
                 }
+            
+            # EVALUATION SUMMARY
+            print(f"\n📊 EVALUATION SUMMARY:")
+            print(f"Total algorithm frames: {len(algorithm_masks)}")
+            print(f"Memorized frames (excluded): {len(annotation_frames)}")
+            print(f"Predicted frames (evaluated): {len(algorithm_masks_clean)}")
+            print(f"Ground truth frames: {len(ground_truth_masks_clean)}")
+            print(f"Common frames for evaluation: {len(common_frames)}")
+            print(f"🎯 GENUINE Mean IoU: {metrics.get('mean_iou', 0.0):.4f}")
+            print(f"🎯 GENUINE Mean Dice: {metrics.get('mean_dice', 0.0):.4f}")
             
             # Create visualization of results
             visualization_path = visualize_comparison(
@@ -3239,6 +3439,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 'metrics': metrics,
                 'ground_truth_count': len(ground_truth_masks_clean),
                 'algorithm_mask_count': len(algorithm_masks_clean),
+                'memorized_frames_excluded': len(annotation_frames),
                 'visualization_path': visualization_path,
                 'iteration': iteration_number,
                 'learning_mode': learning_mode
@@ -3250,10 +3451,17 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 with open(report_path, 'w') as f:
                     f.write(f"# Evaluation Report: {study_uid}/{series_uid}\n\n")
                     f.write(f"- Ground Truth Masks: {len(ground_truth_masks_clean)}\n")
-                    f.write(f"- Algorithm Masks: {len(algorithm_masks_clean)}\n")
+                    f.write(f"- Algorithm Masks (Total): {len(algorithm_masks)}\n")
+                    f.write(f"- Algorithm Masks (Predicted): {len(algorithm_masks_clean)}\n")
+                    f.write(f"- Memorized Frames (Excluded): {len(annotation_frames)}\n")
                     f.write(f"- Common Frames: {len(common_frames)}\n\n")
                     
-                    f.write("## Evaluation Metrics\n\n")
+                    f.write("## Data Leakage Prevention\n\n")
+                    f.write(f"- Memorized annotation frames excluded: {len(annotation_frames)}\n")
+                    f.write(f"- Only predicted frames used for evaluation: {len(algorithm_masks_clean)}\n")
+                    f.write(f"- Overlap between GT and memorized: {len(overlap)}\n\n")
+                    
+                    f.write("## Evaluation Metrics (GENUINE)\n\n")
                     f.write(f"- Mean IoU: {metrics.get('mean_iou', 0.0):.4f}\n")
                     f.write(f"- Median IoU: {metrics.get('median_iou', 0.0):.4f}\n")
                     f.write(f"- Mean Dice: {metrics.get('mean_dice', 0.0):.4f}\n")
@@ -3262,9 +3470,9 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     if 'error' in metrics:
                         f.write(f"**Error in metrics calculation:** {metrics['error']}\n\n")
                     
-                    f.write("## Frame-by-Frame IoU\n\n")
-                    f.write("| Frame | IoU | Dice |\n")
-                    f.write("|-------|-----|------|\n")
+                    f.write("## Frame-by-Frame IoU (Sample)\n\n")
+                    f.write("| Frame | IoU | Dice | Type |\n")
+                    f.write("|-------|-----|------|------|\n")
                     
                     # Add a few example frames
                     try:
@@ -3272,12 +3480,12 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                             try:
                                 frame_iou = calculate_iou(algorithm_masks_clean[frame], ground_truth_masks_clean[frame])
                                 frame_dice = calculate_dice(algorithm_masks_clean[frame], ground_truth_masks_clean[frame])
-                                f.write(f"| {frame} | {frame_iou:.4f} | {frame_dice:.4f} |\n")
+                                f.write(f"| {frame} | {frame_iou:.4f} | {frame_dice:.4f} | Predicted |\n")
                             except Exception as e:
-                                f.write(f"| {frame} | Error: {str(e)} | |\n")
+                                f.write(f"| {frame} | Error: {str(e)} | | |\n")
                         
                         if len(common_frames) > 10:
-                            f.write("| ... | ... | ... |\n")
+                            f.write("| ... | ... | ... | ... |\n")
                     except Exception as e:
                         f.write(f"Error processing frame-by-frame details: {str(e)}\n")
             except Exception as e:
@@ -3302,6 +3510,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 'successful_evaluations': len(valid_results),
                 'overall_mean_iou': np.mean([r['metrics'].get('mean_iou', 0.0) for r in valid_results]),
                 'overall_mean_dice': np.mean([r['metrics'].get('mean_dice', 0.0) for r in valid_results]),
+                'total_memorized_frames_excluded': sum([r.get('memorized_frames_excluded', 0) for r in valid_results]),
                 'best_video': max([(k, v['metrics'].get('mean_iou', 0.0)) for k, v in evaluation_results.items() 
                                 if 'metrics' in v], key=lambda x: x[1])[0],
                 'worst_video': min([(k, v['metrics'].get('mean_iou', 0.0)) for k, v in evaluation_results.items() 
@@ -3314,6 +3523,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 'successful_evaluations': len(valid_results),
                 'overall_mean_iou': 0.0,
                 'overall_mean_dice': 0.0,
+                'total_memorized_frames_excluded': 0,
                 'error': str(e)
             }
         
@@ -3323,24 +3533,31 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
         report_path = os.path.join(output_dir, "overall_evaluation_report.md")
         try:
             with open(report_path, 'w') as f:
-                f.write("# Overall Evaluation Report\n\n")
+                f.write("# Overall Evaluation Report (Data Leakage Prevention)\n\n")
                 f.write(f"- Total Videos: {summary['total_videos']}\n")
                 f.write(f"- Successful Evaluations: {summary['successful_evaluations']}\n")
-                f.write(f"- Overall Mean IoU: {summary.get('overall_mean_iou', 0.0):.4f}\n")
+                f.write(f"- Total Memorized Frames Excluded: {summary.get('total_memorized_frames_excluded', 0)}\n")
+                f.write(f"- Overall Mean IoU (GENUINE): {summary.get('overall_mean_iou', 0.0):.4f}\n")
+                f.write(f"- Overall Mean Dice (GENUINE): {summary.get('overall_mean_dice', 0.0):.4f}\n")
                 f.write(f"- Best Performing Video: {summary.get('best_video', 'N/A')}\n")
                 f.write(f"- Worst Performing Video: {summary.get('worst_video', 'N/A')}\n\n")
                 
-                f.write("## Per-Video Results\n\n")
-                f.write("| Video | Mean IoU | Mean Dice | IoU > 0.7 |\n")
-                f.write("|-------|----------|-----------|----------|\n")
+                f.write("## Data Leakage Prevention Summary\n\n")
+                f.write("This evaluation excludes all frames that were used as input annotations (memorized frames)\n")
+                f.write("to ensure genuine algorithm performance assessment.\n\n")
+                
+                f.write("## Per-Video Results (GENUINE)\n\n")
+                f.write("| Video | Mean IoU | Mean Dice | IoU > 0.7 | Excluded Frames |\n")
+                f.write("|-------|----------|-----------|-----------|------------------|\n")
                 
                 for video_id, results in evaluation_results.items():
                     if video_id != 'summary' and 'metrics' in results:
                         metrics = results['metrics']
+                        excluded = results.get('memorized_frames_excluded', 0)
                         try:
-                            f.write(f"| {video_id} | {metrics.get('mean_iou', 0.0):.4f} | {metrics.get('mean_dice', 0.0):.4f} | {metrics.get('iou_over_0.7', 0.0)*100:.1f}% |\n")
+                            f.write(f"| {video_id} | {metrics.get('mean_iou', 0.0):.4f} | {metrics.get('mean_dice', 0.0):.4f} | {metrics.get('iou_over_0.7', 0.0)*100:.1f}% | {excluded} |\n")
                         except Exception as e:
-                            f.write(f"| {video_id} | Error: {str(e)} | | |\n")
+                            f.write(f"| {video_id} | Error: {str(e)} | | | |\n")
             
             print(f"Overall evaluation report saved to: {report_path}")
         except Exception as e:
@@ -3356,16 +3573,27 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
         print(f"Error saving evaluation results to JSON: {str(e)}")
     
     return evaluation_results
+
 def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_annotations=None, 
                                  free_fluid_annotations=None, annotations_json=None, 
                                  mdai_client=None, project_id=None, dataset_id=None,
                                  label_id_ground_truth=None, label_id_fluid=None,
                                  label_id_no_fluid=None, label_id_machine=None,
                                  flow_processor=None, exam_id=None, learning_mode=False,
-                                 params_file=None, use_genuine_evaluation=False, sampling_rate=10):
+                                 params_file=None, use_genuine_evaluation=False, sampling_rate=10, input_sampling_rate= None, evaluation_sampling_rate=None):
     """
     Runs the complete feedback loop for ground truth creation and evaluation
     """
+
+    if input_sampling_rate is None:
+        input_sampling_rate = sampling_rate  # Default to legacy sampling rate
+    if evaluation_sampling_rate is None:
+        evaluation_sampling_rate = 1         # Default to dense evaluation (every frame)
+    
+    print(f"\n🧪 FEEDBACK LOOP CONFIGURATION:")
+    print(f"Input sampling rate: {input_sampling_rate}")
+    print(f"Evaluation sampling rate: {evaluation_sampling_rate}")
+    
     print("\n" + "="*80)
     print("=== FEEDBACK LOOP WITH IMPROVEMENTS ===")
     print(f"Exam ID: {exam_id or 'ALL'}")
@@ -3572,7 +3800,10 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
                 learning_mode=learning_mode,
                 iteration_number=iteration+1,
                 use_genuine_evaluation=use_genuine_evaluation,
-                sampling_rate=sampling_rate
+                sampling_rate=sampling_rate,
+                input_sampling_rate=input_sampling_rate,
+                evaluation_sampling_rate=evaluation_sampling_rate
+
             )
             print(f"Evaluation completed successfully for iteration {iteration+1}")
         except Exception as e:
@@ -3621,28 +3852,44 @@ def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Ultrasound free fluid tracking using optical flow')
     
+    # Separate input and evaluation sampling rates
+    parser.add_argument('--input-sampling-rate', type=int, default=10, 
+                       help='Sampling rate for tracker INPUT (every Nth frame given to tracker)')
+    parser.add_argument('--eval-sampling-rate', type=int, default=1, 
+                       help='Sampling rate for evaluation (every Nth frame evaluated, 1=all frames)')
+    
+    # Keep the old argument for backward compatibility
+    parser.add_argument('--sampling-rate', type=int, default=10, 
+                       help='Legacy: applies to both input and evaluation')
+    
+    # Core functionality flags
+    parser.add_argument('--create-ground-truth', action='store_true',
+                       help='Create ground truth dataset')
+    parser.add_argument('--feedback-loop', action='store_true',
+                       help='Run ground truth feedback loop')
+    parser.add_argument('--iterations', type=int, default=3, help='Number of iterations for feedback loop')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug mode')
+    parser.add_argument('--upload', action='store_true',
+                       help='Upload results to MD.ai')
+    parser.add_argument('--no-upload', action='store_true',
+                       help='Skip uploading annotations to MD.ai')
+    
     # Add arguments for study and series UIDs
     parser.add_argument('--study', type=str, help='Specific StudyInstanceUID to process')
     parser.add_argument('--series', type=str, help='Specific SeriesInstanceUID to process')
     parser.add_argument('--issue', type=str, choices=['disappear_reappear', 'branching_fluid', 'multiple_distinct', 'no_fluid'],
                         help='Specific issue type to process')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--upload', action='store_true', help='Upload results to MD.ai')
-
-    parser.add_argument('--create-ground-truth', action='store_true', help='Create ground truth dataset')
+    
     parser.add_argument('--ground-truth-videos', type=int, default=15, help='Number of videos per issue type for ground truth')
-    parser.add_argument('--feedback-loop', action='store_true', help='Run ground truth feedback loop')
-    parser.add_argument('--iterations', type=int, default=3, help='Number of iterations for feedback loop')
     parser.add_argument('--exam-id', type=str, help='Run feedback loop on a specific exam ID')
     parser.add_argument('--learning-mode', action='store_true', help='Enable learning mode in feedback loop')
     parser.add_argument('--params-file', type=str, help='Path to parameters JSON file for feedback loop')
     parser.add_argument('--genuine-evaluation', action='store_true', help='Use genuine evaluation with sparse annotations')
-    parser.add_argument('--sampling-rate', type=int, default=10, help='Sampling rate for sparse annotations (take every Nth frame)')
-
+    
     parser.add_argument('--ground-truth-single-exam', type=str, help='Create ground truth for a single exam number (for debugging)')
     parser.add_argument('--ground-truth-single-study', type=str, help='Create ground truth for a single StudyInstanceUID (for debugging)')
     parser.add_argument('--ground-truth-single-series', type=str, help='Create ground truth for a single SeriesInstanceUID (for debugging)')
-    parser.add_argument('--no-upload', action='store_true', help='Skip uploading annotations to MD.ai')
     parser.add_argument('--all-issues', action='store_true', 
                     help='Process all issue types (disappear_reappear, branching_fluid, multiple_distinct)')
     
@@ -4270,7 +4517,9 @@ if __name__ == "__main__":
             learning_mode=args.learning_mode,                   
             params_file=args.params_file,
             use_genuine_evaluation=args.genuine_evaluation,
-            sampling_rate=args.sampling_rate
+            sampling_rate=args.sampling_rate,
+            input_sampling_rate=getattr(args, 'input_sampling_rate', args.sampling_rate),      
+    evaluation_sampling_rate=getattr(args, 'eval_sampling_rate', 1)
         )
         
         print("\nFeedback loop completed!")
@@ -4927,566 +5176,44 @@ else:
 debug_print(f"=== DEBUG LOG ENDED AT {time.ctime()} ===")
 debug_log.close()
 
-def create_sparse_annotations(ground_truth_annotations, sampling_rate=10, min_frames=3):
-    """
-    Create a sparse subset of annotations by sampling frames at regular intervals.
-    
-    Args:
-        ground_truth_annotations: Original dense ground truth annotations dictionary
-        sampling_rate: Take every Nth frame (default: 10)
-        min_frames: Minimum number of frames to include (default: 3)
-        
-    Returns:
-        Dictionary of sparse annotations
-    """
-    if not ground_truth_annotations:
-        return {}
-        
-    print(f"\n=== CREATING SPARSE ANNOTATIONS (sampling rate: {sampling_rate}) ===")
-    
-    # Get all frame indices
-    frame_indices = sorted(list(ground_truth_annotations.keys()))
-    
-    # Sample frames at regular intervals
-    sparse_indices = frame_indices[::sampling_rate]
-    
-    # Always include first and last frame if they have annotations
-    if frame_indices[0] not in sparse_indices:
-        sparse_indices.insert(0, frame_indices[0])
-    if frame_indices[-1] not in sparse_indices:
-        sparse_indices.append(frame_indices[-1])
-    
-    # Make sure we have at least min_frames
-    while len(sparse_indices) < min_frames and sampling_rate > 1:
-        # Reduce sampling rate and try again
-        sampling_rate = max(1, sampling_rate // 2)
-        print(f"Reducing sampling rate to {sampling_rate} to get more frames")
-        sparse_indices = frame_indices[::sampling_rate]
-        
-        # Always include first and last frame
-        if frame_indices[0] not in sparse_indices:
-            sparse_indices.insert(0, frame_indices[0])
-        if frame_indices[-1] not in sparse_indices:
-            sparse_indices.append(frame_indices[-1])
-    
-    # Create sparse annotations dictionary
-    sparse_annotations = {idx: ground_truth_annotations[idx] for idx in sparse_indices}
-    
-    print(f"Created sparse annotation set with {len(sparse_annotations)} frames")
-    print(f"Original annotation set had {len(ground_truth_annotations)} frames")
-    print(f"Reduction: {len(sparse_annotations) / len(ground_truth_annotations):.1%} of original frames")
-    print(f"Sparse frame indices: {sparse_indices}")
-    
-    return sparse_annotations
+
 
 def evaluate_with_sparse_annotations(video_path, ground_truth_masks, flow_processor, output_dir, 
                             sampling_rate=10, min_frames=3, timeout_seconds=300):
     """
     Perform a more genuine evaluation by using sparse annotations as input to the tracking algorithm.
-    
-    Args:
-        video_path: Path to the video file
-        ground_truth_masks: Dictionary of ground truth masks
-        flow_processor: Optical flow processor to use
-        output_dir: Directory to save output
-        sampling_rate: Take every Nth frame (default: 10)
-        min_frames: Minimum number of frames to include (default: 3)
-        
-    Returns:
-        Dictionary with evaluation results
     """
-    import numpy as np
-    import pandas as pd
-    from datetime import datetime
-    import os
-    
     print("\n=== GENUINE EVALUATION WITH SPARSE ANNOTATIONS ===")
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create sparse annotations
-    sparse_masks = create_sparse_annotations(ground_truth_masks, sampling_rate, min_frames)
+    # Create sparse annotations with sampling info
+    sparse_masks, sampling_info = create_sparse_annotations(ground_truth_masks, sampling_rate, min_frames)
     if not sparse_masks:
-        print("No sparse masks could be created")
-        return {"error": "No sparse masks could be created"}
-    
-    # Convert sparse masks to DataFrame format expected by tracker
-    sparse_annotations_df = []
-    for frame_idx, mask in sparse_masks.items():
-        # Convert mask to polygons (simplified version for testing)
-        import cv2
-        binary_mask = (mask > 0.5).astype(np.uint8)
-        contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        polygons = []
-        for contour in contours:
-            # Simplify contour to reduce points
-            epsilon = 0.005 * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            
-            # Convert to list of points
-            polygon = approx.reshape(-1, 2).tolist()
-            if len(polygon) >= 3:  # Need at least 3 points for a polygon
-                polygons.append(polygon)
-        
-        # Create DataFrame row
-        if polygons:
-            annotation = {
-                'frameNumber': int(frame_idx),
-                'free_fluid_foreground': polygons,
-                'labelId': 'L_TEST',  # Placeholder
-                'is_annotation': True
-            }
-            sparse_annotations_df.append(annotation)
-    
-    # Convert to DataFrame
-    sparse_df = pd.DataFrame(sparse_annotations_df)
-    
-    print(f"Created {len(sparse_df)} sparse annotations for tracking")
-    
-    # Initialize tracker with placeholder values
-    from multi_frame_tracking.multi_frame_tracker import MultiFrameTracker
-    sparse_output_dir = os.path.join(output_dir, "sparse_tracking")
-    os.makedirs(sparse_output_dir, exist_ok=True)
-    
-    tracker = MultiFrameTracker(flow_processor, sparse_output_dir, debug_mode=True)
-    
-    # Run tracking algorithm on sparse annotations with timeout
-    print("\nRunning tracking algorithm on sparse annotations...")
-    # Create placeholder values for study/series UIDs
-    study_uid = "SPARSE_TEST_STUDY"
-    series_uid = "SPARSE_TEST_SERIES"
-    
-    # Set up a timeout for the tracking process
-    import signal
-    import threading
-    
-    # Flag to track if the operation completed
-    tracking_completed = False
-    tracking_result = None
-    tracking_error = None
-    
-    # Function to run the tracking in a separate thread
-    def run_tracking():
-        nonlocal tracking_completed, tracking_result, tracking_error
-        try:
-            # Force tracking to finish by setting environment variables
-            os.environ['FORCE_TRACKING'] = '1'
-            os.environ['MAX_TRACKING_FRAMES'] = '100' # Limit to prevent endless processing
-            os.environ['TIMEOUT_ENABLED'] = '1'
-            
-            # Process annotations with strict constraints
-            result = tracker.process_annotations(sparse_df, video_path, study_uid, series_uid)
-            tracking_result = result
-            tracking_completed = True
-        except Exception as e:
-            tracking_error = str(e)
-            tracking_completed = True
-    
-    # Start tracking in a thread
-    tracking_thread = threading.Thread(target=run_tracking)
-    tracking_thread.daemon = True
-    tracking_thread.start()
-    
-    # Wait for completion or timeout
-    start_time = time.time()
-    while not tracking_completed and (time.time() - start_time) < timeout_seconds:
-        time.sleep(1)
-        print(f"Tracking in progress... {int(time.time() - start_time)}s elapsed")
-    
-    if not tracking_completed:
-        print(f"\n⚠️ WARNING: Tracking timed out after {timeout_seconds} seconds!")
-        # Force exit from the evaluation
+        error_info = sampling_info.get("error", "No sparse masks could be created")
         return {
-            "error": f"Tracking timed out after {timeout_seconds} seconds",
-            "metrics": {
-                "mean_iou": 0.0,
-                "median_iou": 0.0,
-                "mean_dice": 0.0,
-                "iou_over_0.7": 0.0
-            }
+            "error": error_info,
+            "metrics": {"mean_iou": 0.0, "median_iou": 0.0, "mean_dice": 0.0, "iou_over_0.7": 0.0},
+            "sampling_info": sampling_info
         }
     
-    if tracking_error:
-        print(f"\n⚠️ ERROR during tracking: {tracking_error}")
-        return {
-            "error": f"Tracking error: {tracking_error}",
-            "metrics": {
-                "mean_iou": 0.0,
-                "median_iou": 0.0,
-                "mean_dice": 0.0,
-                "iou_over_0.7": 0.0
-            }
-        }
+    # Rest of the existing function code...
+    # ... (keep all the existing code until the results dictionary)
     
-    # Get the result
-    tracked_masks = tracking_result
-    print(f"Tracking produced {len(tracked_masks)} masks")
-    
-    # Extract algorithm masks for evaluation
-    algorithm_masks_clean = {}
-    for frame_idx, mask_info in tracked_masks.items():
-        # Skip the original sparse annotations (only evaluate the tracked frames)
-        if isinstance(mask_info, dict) and mask_info.get('is_annotation', False):
-            continue
-            
-        # Extract mask
-        if isinstance(mask_info, dict):
-            mask = mask_info.get('mask')
-            if mask is None:
-                continue
-        else:
-            mask = mask_info
-            
-        # Add to clean masks
-        if isinstance(mask, np.ndarray):
-            algorithm_masks_clean[frame_idx] = mask
-    
-    print(f"Extracted {len(algorithm_masks_clean)} tracked masks for evaluation")
-    
-    # Perform evaluation
-    from evaluation_utils import evaluate_with_iou
-    
-    # Find frames that weren't in the sparse input but are in ground truth
-    sparse_frames = set(sparse_masks.keys())
-    gt_frames = set(ground_truth_masks.keys())
-    evaluation_frames = gt_frames - sparse_frames
-    
-    # Filter ground truth to only include frames not used as input
-    filtered_gt = {idx: ground_truth_masks[idx] for idx in evaluation_frames if idx in ground_truth_masks}
-    print(f"Evaluating on {len(filtered_gt)} ground truth frames (excluding sparse input frames)")
-    
-    # Only include algorithm frames that match these evaluation frames
-    filtered_algo = {idx: algorithm_masks_clean[idx] for idx in algorithm_masks_clean 
-                    if idx in filtered_gt}
-    
-    # Run evaluation
-    metrics = evaluate_with_iou(filtered_algo, filtered_gt)
-    
-    # Create visualization
-    from visualisation_utils import visualize_comparison
-    vis_path = os.path.join(output_dir, "sparse_evaluation.mp4")
-    visualize_comparison(video_path, filtered_algo, filtered_gt, vis_path)
-    
-    # Return results
+    # Update the results dictionary to include sampling information
     results = {
         "metrics": metrics,
-        "sparse_frame_count": len(sparse_masks),
-        "tracked_frame_count": len(algorithm_masks_clean),
-        "evaluation_frame_count": len(filtered_gt),
-        "matched_frame_count": len(set(filtered_algo.keys()) & set(filtered_gt.keys())),
+        "sampling_info": sampling_info,
+        "evaluation_details": {
+            "sparse_frame_count": len(sparse_masks),
+            "tracked_frame_count": len(algorithm_masks_clean),
+            "evaluation_frame_count": len(filtered_gt),
+            "matched_frame_count": len(set(filtered_algo.keys()) & set(filtered_gt.keys())),
+        },
         "visualization_path": vis_path
     }
     
-    print(f"Sparse evaluation complete - matched {results['matched_frame_count']} frames")
+    print(f"Sparse evaluation complete - matched {results['evaluation_details']['matched_frame_count']} frames")
     print(f"Mean IoU: {metrics.get('summary', {}).get('mean_iou', 0):.4f}")
     
     return results
-
-def create_ground_truth_dataset(video_paths, study_series_pairs, flow_processor, output_dir, 
-                              mdai_client, project_id, dataset_id, ground_truth_label_id,
-                              matched_annotations=None, free_fluid_annotations=None, 
-                              label_id_fluid=None, label_id_no_fluid=None, 
-                              label_id_machine=None, annotations_json=None, args=None,
-                              label_ids=None, base_path=None, upload=False):
-    """Create ground truth dataset from annotations"""
-    
-    # Initialize results dictionary
-    results = {
-        'processed_videos': [],
-        'failed_videos': [],
-        'total_annotations_created': 0,
-        'total_upload_success': 0,
-        'total_upload_failures': 0
-    }
-    
-    print(f"Creating ground truth dataset for {len(video_paths)} videos...")
-    
-    for i, (video_path, (study_uid, series_uid)) in enumerate(zip(video_paths, study_series_pairs)):
-        print(f"\nProcessing video {i+1}/{len(video_paths)}")
-        print(f"Study UID: {study_uid}")
-        print(f"Series UID: {series_uid}")
-        
-        # Find exam number for this study
-        exam_number = "unknown"
-        if annotations_json:
-            try:
-                exam_number = find_exam_number(study_uid, annotations_json)
-                print(f"Exam Number: {exam_number}")
-            except Exception as e:
-                print(f"Could not determine exam number: {e}")
-        
-        # Create output directory for this video
-        video_output_dir = os.path.join(output_dir, f"exam_{exam_number}_{study_uid}_{series_uid}")
-        os.makedirs(video_output_dir, exist_ok=True)
-        
-        try:
-            # Find a valid frame with polygons or no-fluid annotation
-            video_annotations = free_fluid_annotations[
-                (free_fluid_annotations['StudyInstanceUID'] == study_uid) &
-                (free_fluid_annotations['SeriesInstanceUID'] == series_uid)
-            ]
-            
-            if len(video_annotations) == 0:
-                print(f"No annotations found for {study_uid}/{series_uid}, skipping")
-                results['failed_videos'].append({
-                    'video': video_path,
-                    'study_uid': study_uid,
-                    'series_uid': series_uid,
-                    'exam_number': exam_number,
-                    'error': 'No annotations found'
-                })
-                continue
-            
-            # Find the first frame with valid polygons or no-fluid annotation
-            valid_frame = None
-            frame_number = None
-            free_fluid_polygons = None
-            is_no_fluid = False
-            
-            print(f"\nDEBUGGING ANNOTATIONS for {study_uid}/{series_uid}:")
-            print(f"Total annotations for this video: {len(video_annotations)}")
-            print(f"Column names: {video_annotations.columns.tolist()}")
-            
-            # Check if exam number is 91
-            is_exam_91 = exam_number == 91
-            if is_exam_91:
-                print(f"\n*** SPECIAL HANDLING FOR EXAM 91 ***")
-                print(f"Checking all {len(video_annotations)} annotations in detail...")
-                
-                # Get all unique label IDs
-                if 'labelId' in video_annotations.columns:
-                    all_label_ids = video_annotations['labelId'].unique().tolist()
-                    print(f"Label IDs in annotations: {all_label_ids}")
-                    print(f"Expected fluid label ID: {label_id_fluid}")
-                    print(f"Expected no-fluid label ID: {label_id_no_fluid}")
-                
-                # First check for no-fluid annotations
-                no_fluid_frames = []
-                fluid_frames = []
-                
-                for idx, row in video_annotations.iterrows():
-                    frame_num = row.get('frameNumber', 'unknown')
-                    label_id = row.get('labelId', 'unknown')
-                    
-                    if label_id == label_id_no_fluid:
-                        no_fluid_frames.append((idx, frame_num))
-                    elif label_id == label_id_fluid:
-                        polygons = row.get('free_fluid_foreground', [])
-                        if isinstance(polygons, list) and len(polygons) > 0:
-                            fluid_frames.append((idx, frame_num))
-                
-                print(f"\nFound {len(no_fluid_frames)} no-fluid frames and {len(fluid_frames)} fluid frames")
-                
-                # Prefer no-fluid frames for exam 91
-                if no_fluid_frames:
-                    valid_frame, frame_number = no_fluid_frames[0]
-                    is_no_fluid = True
-                    free_fluid_polygons = []  # Empty list for no-fluid
-                    print(f"\nSelected no-fluid frame {frame_number} for tracking")
-                elif fluid_frames:
-                    valid_frame, frame_number = fluid_frames[0]
-                    row = video_annotations.loc[valid_frame]
-                    free_fluid_polygons = row['free_fluid_foreground']
-                    print(f"\nSelected fluid frame {frame_number} for tracking with {len(free_fluid_polygons)} polygons")
-            
-            # Regular processing for non-exam-91
-            if valid_frame is None:
-                for idx, row in video_annotations.iterrows():
-                    frame_num = row.get('frameNumber', 'unknown')
-                    label_id = row.get('labelId', 'unknown')
-                    
-                    if label_id == label_id_no_fluid:
-                        valid_frame = idx
-                        frame_number = int(row['frameNumber'])
-                        free_fluid_polygons = []
-                        is_no_fluid = True
-                        print(f"Found no-fluid frame {frame_number}")
-                        break
-                    else:
-                        polygons = row.get('free_fluid_foreground', [])
-                        if isinstance(polygons, list) and len(polygons) > 0:
-                            valid_frame = idx
-                            frame_number = int(row['frameNumber'])
-                            free_fluid_polygons = polygons
-                            print(f"Found fluid frame {frame_number} with {len(polygons)} polygons")
-                            break
-            
-            if valid_frame is None:
-                print(f"No valid frames found in any frame for {study_uid}/{series_uid}, skipping")
-                results['failed_videos'].append({
-                    'video': video_path,
-                    'study_uid': study_uid,
-                    'series_uid': series_uid,
-                    'exam_number': exam_number,
-                    'error': 'No valid frames found'
-                })
-                continue
-            
-            # Get the issue type
-            issue_type = "unknown"
-            if 'issue_type' in video_annotations.columns:
-                issue_type = video_annotations.loc[valid_frame, 'issue_type']
-                print(f"Issue type: {issue_type}")
-            
-            # Create ground truth annotations
-            try:
-                # Load video to get dimensions
-                cap = cv2.VideoCapture(video_path)
-                if not cap.isOpened():
-                    raise ValueError(f"Could not open video: {video_path}")
-                
-                frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                cap.release()
-                
-                # Create ground truth mask
-                if is_no_fluid:
-                    # For no-fluid frames, create an empty mask
-                    ground_truth_mask = create_empty_mask(frame_height, frame_width)
-                else:
-                    # For fluid frames, create mask from polygons
-                    ground_truth_mask = polygons_to_mask(free_fluid_polygons, frame_height, frame_width)
-                
-                # Save ground truth mask
-                mask_path = os.path.join(video_output_dir, f"ground_truth_mask_frame_{frame_number}.npy")
-                np.save(mask_path, ground_truth_mask)
-                
-                # Create annotation for upload
-                annotation = {
-                    'labelId': ground_truth_label_id,
-                    'StudyInstanceUID': study_uid,
-                    'SeriesInstanceUID': series_uid,
-                    'frameNumber': frame_number,
-                    'groupId': label_id_machine,
-                    'note': f'Ground truth: {"No fluid" if is_no_fluid else "Fluid"} frame - Exam #{exam_number}'
-                }
-                
-                if not is_no_fluid:
-                    annotation['data'] = {'foreground': free_fluid_polygons}
-                
-                # Upload if requested
-                if upload and mdai_client:
-                    try:
-                        response = mdai_client.create_annotation(
-                            project_id=project_id,
-                            dataset_id=dataset_id,
-                            **annotation
-                        )
-                        print(f"✓ Uploaded ground truth annotation for frame {frame_number}")
-                        results['total_upload_success'] += 1
-                    except Exception as e:
-                        print(f"✗ Failed to upload annotation: {str(e)}")
-                        results['total_upload_failures'] += 1
-                
-                results['processed_videos'].append({
-                    'video': video_path,
-                    'study_uid': study_uid,
-                    'series_uid': series_uid,
-                    'exam_number': exam_number,
-                    'frame_number': frame_number,
-                    'mask_path': mask_path,
-                    'is_no_fluid': is_no_fluid
-                })
-                
-                results['total_annotations_created'] += 1
-                
-            except Exception as e:
-                print(f"Error creating ground truth: {str(e)}")
-                traceback.print_exc()
-                results['failed_videos'].append({
-                    'video': video_path,
-                    'study_uid': study_uid,
-                    'series_uid': series_uid,
-                    'exam_number': exam_number,
-                    'error': str(e)
-                })
-        
-        except Exception as e:
-            print(f"Error processing video {video_path}: {str(e)}")
-            traceback.print_exc()
-            results['failed_videos'].append({
-                'video': video_path,
-                'study_uid': study_uid,
-                'series_uid': series_uid,
-                'exam_number': exam_number,
-                'error': str(e)
-            })
-    
-    # Generate summary
-    results['summary'] = {
-        'total_videos': len(video_paths),
-        'successful_videos': len(results['processed_videos']),
-        'failed_videos': len(results['failed_videos']),
-        'total_annotations_created': results['total_annotations_created'],
-        'total_upload_success': results['total_upload_success'],
-        'total_upload_failures': results['total_upload_failures'],
-        'exam_numbers_processed': sorted(list(set([v['exam_number'] for v in results['processed_videos'] + results['failed_videos']])))
-    }
-    
-    # Save detailed results
-    results_path = os.path.join(output_dir, 'ground_truth_creation_results.json')
-    with open(results_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    print(f"\nGround truth dataset creation complete!")
-    print(f"Results saved to: {results_path}")
-    print(f"Exam numbers processed: {', '.join(map(str, results['summary']['exam_numbers_processed']))}")
-    
-    return results
-
-def calculate_iou(gt_mask, pred_mask):
-    """Calculate Intersection over Union"""
-    intersection = np.logical_and(gt_mask, pred_mask)
-    union = np.logical_or(gt_mask, pred_mask)
-    iou = np.sum(intersection) / np.sum(union) if np.sum(union) > 0 else 0
-    return iou
-
-def calculate_dice(gt_mask, pred_mask):
-    """Calculate Dice coefficient"""
-    intersection = np.logical_and(gt_mask, pred_mask)
-    dice = 2 * np.sum(intersection) / (np.sum(gt_mask) + np.sum(pred_mask)) if (np.sum(gt_mask) + np.sum(pred_mask)) > 0 else 0
-    return dice
-
-def evaluate_with_iou(algorithm_masks, ground_truth_masks):
-    """Evaluate algorithm masks against ground truth using IoU"""
-    metrics = {
-        'frame_ious': {},
-        'frame_dice': {},
-        'summary': {}
-    }
-    
-    # Calculate per-frame metrics
-    for frame_idx in set(algorithm_masks.keys()) & set(ground_truth_masks.keys()):
-        algo_mask = algorithm_masks[frame_idx]
-        gt_mask = ground_truth_masks[frame_idx]
-        
-        # Convert to binary masks if needed
-        if isinstance(algo_mask, dict) and 'mask' in algo_mask:
-            algo_mask = algo_mask['mask']
-        algo_binary = algo_mask > 0.5
-        
-        if isinstance(gt_mask, dict) and 'mask' in gt_mask:
-            gt_mask = gt_mask['mask']
-        gt_binary = gt_mask > 0.5
-        
-        # Calculate metrics
-        iou = calculate_iou(gt_binary, algo_binary)
-        dice = calculate_dice(gt_binary, algo_binary)
-        
-        metrics['frame_ious'][frame_idx] = float(iou)
-        metrics['frame_dice'][frame_idx] = float(dice)
-    
-    # Calculate summary metrics
-    if metrics['frame_ious']:
-        iou_values = list(metrics['frame_ious'].values())
-        dice_values = list(metrics['frame_dice'].values())
-        
-        metrics['summary'] = {
-            'mean_iou': float(np.mean(iou_values)),
-            'median_iou': float(np.median(iou_values)),
-            'mean_dice': float(np.mean(dice_values)),
-            'iou_over_0.7': len([x for x in iou_values if x > 0.7]) / len(iou_values)
-        }
-    
-    return metrics
 
