@@ -5172,83 +5172,7 @@ if __name__ == "__main__":
                 free_fluid_annotations = free_fluid_annotations[free_fluid_annotations['file_exists']]
                 print(f"After filtering, {len(free_fluid_annotations)} annotations remain")
                
-                # Create a small test before launching the full ground truth creation
-                print("\n=== TESTING GROUND TRUTH CREATION WITH MINIMAL SAMPLE ===")
-               
-                # Find one video to test with
-                study_dirs = sorted(os.listdir(BASE))[:10]  # Look at first 10 studies
-                test_video_found = False
-               
-                for study_dir in study_dirs:
-                    study_path = os.path.join(BASE, study_dir)
-                    if os.path.isdir(study_path):
-                        for file in os.listdir(study_path):
-                            if file.endswith('.mp4'):
-                                test_video = os.path.join(study_path, file)
-                                study_uid = study_dir
-                                series_uid = file.replace('.mp4', '')
-                               
-                                print(f"Found test video: {test_video}")
-                               
-                                # Create test directory
-                                test_output_dir = os.path.join(OUTPUT_DIR, "ground_truth_test")
-                                os.makedirs(test_output_dir, exist_ok=True)
-                               
-                                # Initialize flow processor for testing
-                                print("Initializing flow processor...")
-                                from src.multi_frame_tracking.opticalflowprocessor import OpticalFlowProcessor
-                                flow_processor = OpticalFlowProcessor(method='dis')
-                                print("Flow processor initialized successfully")
-                               
-                                # Open video for dimensions
-                                cap = cv2.VideoCapture(test_video)
-                                if cap.isOpened():
-                                    ret, frame = cap.read()
-                                    if ret:
-                                        # Create a small test mask
-                                        test_mask = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.uint8)
-                                        center_x = frame.shape[1] // 2
-                                        center_y = frame.shape[0] // 2
-                                        radius = min(center_x, center_y) // 4
-                                       
-                                        # Draw a simple circle
-                                        cv2.circle(test_mask, (center_x, center_y), radius, 1, -1)
-                                       
-                                        # Save mask for verification
-                                        mask_path = os.path.join(test_output_dir, "test_mask.png")
-                                        cv2.imwrite(mask_path, test_mask * 255)
-                                        print(f"Created and saved test mask to {mask_path}")
-                                       
-                                        # Test basic flow tracking on a small range
-                                        print("Testing flow tracking with minimal frame range...")
-                                        debug_dir = os.path.join(test_output_dir, "debug")
-                                        os.makedirs(debug_dir, exist_ok=True)
-                                       
-                                        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                                        test_range = min(10, frame_count - 1)
-                                       
-                                        try:
-                                            # Import track_frames function
-                                            from src.multi_frame_tracking.utils import track_frames
-                                           
-                                            frames = track_frames(
-                                                cap, 0, test_range, test_mask, debug_dir,
-                                                forward=True, pbar=None, flow_processor=flow_processor
-                                            )
-                                           
-                                            print(f"Successfully tracked {len(frames)} frames")
-                                            print("Optical flow and tracking systems are working properly")
-                                        except Exception as e:
-                                            print(f"Error during test tracking: {str(e)}")
-                                            traceback.print_exc()
-                                   
-                                    cap.release()
-                               
-                                # Test complete, break out of the loops
-                                test_video_found = True
-                                break
-                        if test_video_found:
-                            break
+                
                
                 print("Test completed. Proceeding with full ground truth creation...")
                
@@ -5294,6 +5218,25 @@ if __name__ == "__main__":
                         project = SimpleProject(DATA_DIR, DATASET_ID)
                         BASE = project.get_dataset_by_id(DATASET_ID).images_dir
                         print(f"Using BASE path from project: {BASE}")
+
+                print(f"free_fluid_annotations size before creating target_videos: {len(free_fluid_annotations)}")
+
+                if len(free_fluid_annotations) == 0:
+                   print("❌ free_fluid_annotations is empty! Recreating from original data...")
+    
+    # Recreate from the original DataFrame
+                free_fluid_annotations = annotations_df[
+                  ((annotations_df['labelId'] == LABEL_ID_FREE_FLUID) |
+                  (annotations_df['labelId'] == LABEL_ID_NO_FLUID)) &
+                   (annotations_df['frameNumber'].notna())
+                ].copy()
+    
+    # Re-process the basic fields
+                free_fluid_annotations['frameNumber'] = free_fluid_annotations['frameNumber'].astype(int)
+                free_fluid_annotations.rename(columns={'data_foreground': 'free_fluid_foreground'}, inplace=True)
+    
+                print(f"✓ Recreated {len(free_fluid_annotations)} annotations")
+                
                 
                 # Create target_videos list from free fluid annotations
                 target_videos = []
@@ -5355,6 +5298,10 @@ if __name__ == "__main__":
                 print(f"  - Free fluid annotations: {len(free_fluid_annotations)}")
                 
                 if len(free_fluid_annotations) > 0 and len(video_paths) > 0:
+
+                    from src.multi_frame_tracking.opticalflowprocessor import OpticalFlowProcessor
+                    flow_processor = OpticalFlowProcessor(method='dis')  
+                    print("✓ Initialized flow processor")
                     result = create_ground_truth_dataset(
                         video_paths=video_paths,
                         study_series_pairs=study_series_pairs,
@@ -5485,4 +5432,3 @@ def evaluate_with_sparse_annotations(video_path, ground_truth_masks, flow_proces
     print(f"Mean IoU: {metrics.get('summary', {}).get('mean_iou', 0):.4f}")
     
     return results
-

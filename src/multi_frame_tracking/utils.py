@@ -21,15 +21,43 @@ def print_mask_stats(mask, frame_num):
     print(f"Mask mean: {np.mean(mask)}")
     print(f"Unique values: {np.unique(mask)}")
 
-def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forward=True, pbar=None, flow_processor=None, recursion_depth=0, quality_threshold=0.7):
+def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forward=True, pbar=None, flow_processor=None, recursion_depth=0, shared_params=None, quality_threshold=None):
     """
     Track a mask between frames using GENUINE optical flow tracking.
     
     This version fixes the blending issues and enforces pure optical flow tracking.
+    Now uses SharedParams for dynamic parameter adjustment.
     """
     frames = []
     frame_idx = start_frame
     step = 1 if forward else -1
+    
+    # Use SharedParams if available, otherwise fall back to provided threshold or default
+    if shared_params is not None:
+        actual_quality_threshold = shared_params.tracking_params['flow_quality_threshold']
+        flow_noise_threshold = shared_params.tracking_params['flow_noise_threshold']
+        mask_threshold = shared_params.tracking_params['mask_threshold']
+        border_constraint_weight = shared_params.tracking_params['border_constraint_weight']
+        contour_min_area = shared_params.tracking_params['contour_min_area']
+        morphology_kernel_size = shared_params.tracking_params['morphology_kernel_size']
+        
+        print(f"🔧 Using SharedParams v{shared_params.version}:")
+        print(f"    Flow quality threshold: {actual_quality_threshold}")
+        print(f"    Flow noise threshold: {flow_noise_threshold}")
+        print(f"    Mask threshold: {mask_threshold}")
+        print(f"    Border constraint weight: {border_constraint_weight}")
+    else:
+        actual_quality_threshold = quality_threshold if quality_threshold is not None else 0.7
+        flow_noise_threshold = 3.0  # Default
+        mask_threshold = 0.5  # Default
+        border_constraint_weight = 0.9  # Default
+        contour_min_area = 50  # Default
+        morphology_kernel_size = 5  # Default
+        
+        print(f"🔧 Using fallback parameters:")
+        print(f"    Flow quality threshold: {actual_quality_threshold}")
+        print(f"    Flow noise threshold: {flow_noise_threshold}")
+        print(f"    Mask threshold: {mask_threshold}")
     
     # Tracking statistics
     total_frames_processed = 0
@@ -42,7 +70,7 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
     print(f"  Start frame: {start_frame}")
     print(f"  End frame: {end_frame}")
     print(f"  Forward: {forward}")
-    print(f"  Quality threshold: {quality_threshold}")
+    print(f"  Using quality threshold: {actual_quality_threshold}")
     
     # Set video to starting frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
@@ -80,7 +108,7 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
             
             # First frame - just store it
             if frame_idx == start_frame:
-                print(f"📌 Frame {frame_idx}: Initial frame (mask area: {np.sum(current_mask > 0.5)})")
+                print(f"📌 Frame {frame_idx}: Initial frame (mask area: {np.sum(current_mask > mask_threshold)})")
                 
                 # Store with flow metadata
                 frames.append((
@@ -94,7 +122,8 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
                         'optical_flow_used': False,
                         'flow_quality': 0.0,
                         'is_initial_frame': True,
-                        'tracking_method': 'initial'
+                        'tracking_method': 'initial',
+                        'shared_params_version': shared_params.version if shared_params else 'none'
                     }
                 ))
                 total_frames_processed += 1
@@ -120,14 +149,24 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
                             consecutive_errors += 1
                             total_frames_skipped += 1
                         else:
-                            # Calculate flow quality
+                            # Calculate flow quality using SharedParams thresholds
                             flow_magnitude = np.sqrt(flow[:,:,0]**2 + flow[:,:,1]**2)
-                            mean_flow = np.mean(flow_magnitude[current_mask > 0.5])
-                            max_flow = np.max(flow_magnitude[current_mask > 0.5]) if np.sum(current_mask > 0.5) > 0 else 0
                             
-                            # Calculate mask consistency metrics
-                            original_area = np.sum(current_mask > 0.5)
-                            flow_area = np.sum(flow_mask > 0.5)
+                            # Filter out noise using SharedParams noise threshold
+                            mask_region = current_mask > mask_threshold
+                            if np.sum(mask_region) > 0:
+                                valid_flow = flow_magnitude[mask_region]
+                                # Filter out noise
+                                valid_flow = valid_flow[valid_flow < flow_noise_threshold * np.std(valid_flow) + np.mean(valid_flow)]
+                                mean_flow = np.mean(valid_flow) if len(valid_flow) > 0 else 0
+                                max_flow = np.max(valid_flow) if len(valid_flow) > 0 else 0
+                            else:
+                                mean_flow = 0
+                                max_flow = 0
+                            
+                            # Calculate mask consistency metrics using SharedParams mask threshold
+                            original_area = np.sum(current_mask > mask_threshold)
+                            flow_area = np.sum(flow_mask > mask_threshold)
                             area_ratio = flow_area / original_area if original_area > 0 else 0
                             
                             # Calculate IoU between consecutive masks
@@ -140,11 +179,29 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
                             print(f"    IoU with previous: {iou:.3f}")
                             
                             # CRITICAL: Use PURE optical flow result (no blending!)
-                            # This is the key fix - don't blend with previous mask
+                            # Apply SharedParams-based post-processing
                             new_mask = flow_mask.copy()
                             
-                            # Apply quality checks
-                            flow_quality_ok = mean_flow >= quality_threshold
+                            # Apply morphological operations using SharedParams kernel size
+                            if morphology_kernel_size > 0:
+                                kernel = np.ones((morphology_kernel_size, morphology_kernel_size), np.uint8)
+                                binary_mask = (new_mask > mask_threshold).astype(np.uint8)
+                                binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel)
+                                binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
+                                new_mask = binary_mask.astype(float)
+                            
+                            # Remove small contours using SharedParams min area
+                            if contour_min_area > 0:
+                                binary_mask = (new_mask > mask_threshold).astype(np.uint8)
+                                contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                filtered_mask = np.zeros_like(binary_mask)
+                                for contour in contours:
+                                    if cv2.contourArea(contour) >= contour_min_area:
+                                        cv2.fillPoly(filtered_mask, [contour], 1)
+                                new_mask = filtered_mask.astype(float)
+                            
+                            # Apply quality checks using SharedParams thresholds
+                            flow_quality_ok = mean_flow >= actual_quality_threshold
                             area_ok = 0.3 <= area_ratio <= 3.0  # Reasonable area change
                             iou_ok = iou >= 0.2  # Minimum overlap with previous frame
                             
@@ -157,7 +214,7 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
                                 tracking_method = 'genuine_optical_flow'
                             else:
                                 print(f"⚠️  Frame {frame_idx}: Low quality optical flow")
-                                print(f"    Quality OK: {flow_quality_ok} (threshold: {quality_threshold})")
+                                print(f"    Quality OK: {flow_quality_ok} (threshold: {actual_quality_threshold})")
                                 print(f"    Area OK: {area_ok} (ratio: {area_ratio:.3f})")
                                 print(f"    IoU OK: {iou_ok} (IoU: {iou:.3f})")
                                 tracking_method = 'low_quality_optical_flow'
@@ -178,10 +235,12 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
                                     'iou_with_previous': iou,
                                     'is_genuine_tracking': is_genuine,
                                     'tracking_method': tracking_method,
+                                    'shared_params_version': shared_params.version if shared_params else 'none',
                                     'quality_checks': {
                                         'flow_quality_ok': flow_quality_ok,
                                         'area_ok': area_ok,
-                                        'iou_ok': iou_ok
+                                        'iou_ok': iou_ok,
+                                        'actual_quality_threshold': actual_quality_threshold
                                     }
                                 }
                             ))
@@ -228,6 +287,8 @@ def track_frames(cap, start_frame, end_frame, initial_mask, debug_dir=None, forw
     print(f"    Total frames processed: {total_frames_processed}")
     print(f"    Frames with genuine optical flow: {genuine_flow_frames}")
     print(f"    Frames skipped: {total_frames_skipped}")
+    print(f"    Used SharedParams version: {shared_params.version if shared_params else 'none'}")
+    print(f"    Final quality threshold: {actual_quality_threshold}")
     
     if total_frames_processed > 0:
         genuine_rate = (genuine_flow_frames / total_frames_processed) * 100

@@ -132,89 +132,201 @@ class SharedParams:
     
     def update_from_feedback(self, metrics):
         """
-        Update parameters based on feedback metrics.
-        Enhanced for sparse sampling compensation.
+        Enhanced parameter learning that adjusts 6+ parameters based on feedback metrics.
+        Now includes learning_rate, mask_threshold, flow_noise_threshold, and more.
         """
-        print(f"\n🔧 ===== PARAMETER LEARNING DEBUG =====")
+        print(f"\n🔧 ===== ENHANCED PARAMETER LEARNING DEBUG =====")
         print(f"🔧 update_from_feedback() called!")
         print(f"🔧 Current IoU: {metrics.get('mean_iou', 0):.4f}")
         print(f"🔧 Current Dice: {metrics.get('mean_dice', 0):.4f}")
         print(f"🔧 Performance history length: {len(self.performance_history)}")
         print(f"🔧 Current parameters:")
-        print(f"🔧   - window_size: {self.tracking_params['window_size']}")
-        print(f"🔧   - flow_quality_threshold: {self.tracking_params['flow_quality_threshold']:.3f}")
-        print(f"🔧   - learning_rate: {self.tracking_params['learning_rate']:.3f}")
+        for param_name, param_value in self.tracking_params.items():
+            print(f"🔧   - {param_name}: {param_value}")
         print(f"🔧 ==========================================\n")
         
         # Store performance history
         self.performance_history.append(metrics)
         
         current_iou = metrics.get('mean_iou', 0)
-        print(f"Current IoU: {current_iou:.4f}")
+        current_dice = metrics.get('mean_dice', 0)
+        iou_over_threshold = metrics.get('iou_over_0.7', 0)
         
-        # AGGRESSIVE: Always try to improve if IoU is below threshold
-        if current_iou < 0.6:  # Lowered threshold for aggressive adaptation
-            print(f"🔧 IoU below 0.6 - applying aggressive parameter adjustments")
+        print(f"Current Performance: IoU={current_iou:.4f}, Dice={current_dice:.4f}, >0.7={iou_over_threshold*100:.1f}%")
+        
+        # Track which parameters we're changing
+        changes_made = []
+        improved = False
+        
+        # AGGRESSIVE MODE: Always try to improve if performance is below thresholds
+        if current_iou < 0.65 or iou_over_threshold < 0.3:  # Lowered thresholds for more aggressive adaptation
+            print(f"🔧 Performance below target - applying ENHANCED aggressive parameter adjustments")
             improved = True
             
-            # Increase window size significantly for better propagation
+            # 1. EXISTING: Window size adjustment (more aggressive)
             old_window = self.tracking_params['window_size']
-            self.tracking_params['window_size'] = min(80, old_window + 15)
-            print(f"🔧 Increased window_size: {old_window} → {self.tracking_params['window_size']}")
+            self.tracking_params['window_size'] = min(200, old_window + 20)  # Increased from +15 to +20
+            changes_made.append(f"window_size: {old_window} → {self.tracking_params['window_size']}")
             
-            # Relax quality thresholds for sparse sampling
+            # 2. EXISTING: Flow quality threshold (more aggressive)
             old_quality = self.tracking_params['flow_quality_threshold']
-            self.tracking_params['flow_quality_threshold'] = max(0.3, old_quality - 0.1)
-            print(f"🔧 Relaxed flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f}")
+            self.tracking_params['flow_quality_threshold'] = max(0.1, old_quality - 0.15)  # Increased from -0.1 to -0.15
+            changes_made.append(f"flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f}")
             
-            # Increase learning rate for faster adaptation
+            # 3. EXISTING: Learning rate (more aggressive)
             old_lr = self.tracking_params['learning_rate']
-            self.tracking_params['learning_rate'] = min(0.8, old_lr + 0.2)
-            print(f"🔧 Increased learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f}")
+            self.tracking_params['learning_rate'] = min(0.9, old_lr + 0.25)  # Increased from +0.2 to +0.25
+            changes_made.append(f"learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f}")
             
-            print(f"🔧 AGGRESSIVE ADAPTATION COMPLETE - Parameters improved!")
+            # 4. NEW: Flow noise threshold adjustment
+            old_noise = self.tracking_params['flow_noise_threshold']
+            self.tracking_params['flow_noise_threshold'] = max(1.0, old_noise - 0.7)  # More aggressive noise filtering
+            changes_made.append(f"flow_noise_threshold: {old_noise:.3f} → {self.tracking_params['flow_noise_threshold']:.3f}")
+            
+            # 5. NEW: Mask threshold adjustment
+            old_mask = self.tracking_params['mask_threshold']
+            self.tracking_params['mask_threshold'] = max(0.25, old_mask - 0.15)  # More relaxed mask threshold
+            changes_made.append(f"mask_threshold: {old_mask:.3f} → {self.tracking_params['mask_threshold']:.3f}")
+            
+            # 6. NEW: Border constraint weight
+            old_border = self.tracking_params['border_constraint_weight']
+            self.tracking_params['border_constraint_weight'] = max(0.3, old_border - 0.1)  # Relax border constraints
+            changes_made.append(f"border_constraint_weight: {old_border:.3f} → {self.tracking_params['border_constraint_weight']:.3f}")
+            
+            # 7. NEW: Contour minimum area (relax to catch smaller features)
+            old_contour = self.tracking_params['contour_min_area']
+            self.tracking_params['contour_min_area'] = max(20, old_contour - 15)  # Allow smaller contours
+            changes_made.append(f"contour_min_area: {old_contour} → {self.tracking_params['contour_min_area']}")
+            
+            # 8. NEW: Morphology kernel size
+            old_morph = self.tracking_params['morphology_kernel_size']
+            self.tracking_params['morphology_kernel_size'] = min(7, old_morph + 1)  # Slightly larger morphology
+            changes_made.append(f"morphology_kernel_size: {old_morph} → {self.tracking_params['morphology_kernel_size']}")
+            
+            # 9. NEW: Distance decay factor (for learning propagation)
+            old_decay = self.tracking_params['distance_decay_factor']
+            self.tracking_params['distance_decay_factor'] = max(1.0, old_decay - 0.2)  # Less aggressive decay
+            changes_made.append(f"distance_decay_factor: {old_decay:.3f} → {self.tracking_params['distance_decay_factor']:.3f}")
+            
+            print(f"🔧 ENHANCED ADAPTATION COMPLETE - Adjusted {len(changes_made)} parameters!")
+            for change in changes_made:
+                print(f"🔧   {change}")
+            
             return improved
         
-        # If we have history, compare with previous
+        # If we have history, compare with previous performance
         if len(self.performance_history) >= 2:
             previous_iou = self.performance_history[-2].get('mean_iou', 0)
+            previous_dice = self.performance_history[-2].get('mean_dice', 0)
+            previous_threshold = self.performance_history[-2].get('iou_over_0.7', 0)
+            
             iou_change = current_iou - previous_iou
+            dice_change = current_dice - previous_dice
+            threshold_change = iou_over_threshold - previous_threshold
             
-            print(f"🔧 Previous IoU: {previous_iou:.4f}, Change: {iou_change:+.4f}")
+            print(f"🔧 Performance changes:")
+            print(f"🔧   IoU: {previous_iou:.4f} → {current_iou:.4f} ({iou_change:+.4f})")
+            print(f"🔧   Dice: {previous_dice:.4f} → {current_dice:.4f} ({dice_change:+.4f})")
+            print(f"🔧   >0.7: {previous_threshold*100:.1f}% → {iou_over_threshold*100:.1f}% ({threshold_change*100:+.1f}%)")
             
-            if iou_change < -0.05:  # IoU dropped significantly
-                print("🔧 Significant IoU drop detected - compensating")
+            # SIGNIFICANT PERFORMANCE DROP - Emergency corrections
+            if iou_change < -0.05 or dice_change < -0.05:
+                print("🔧 SIGNIFICANT PERFORMANCE DROP DETECTED - Emergency parameter corrections!")
+                improved = True
                 
-                # More aggressive compensation for IoU drops
+                # Emergency adjustments - be more aggressive
+                old_window = self.tracking_params['window_size']
+                old_quality = self.tracking_params['flow_quality_threshold']
+                old_lr = self.tracking_params['learning_rate']
+                old_noise = self.tracking_params['flow_noise_threshold']
+                old_mask = self.tracking_params['mask_threshold']
+                
+                # Make larger adjustments
+                self.tracking_params['window_size'] = min(200, old_window + 30)
+                self.tracking_params['flow_quality_threshold'] = max(0.1, old_quality - 0.2)
+                self.tracking_params['learning_rate'] = min(0.95, old_lr + 0.3)
+                self.tracking_params['flow_noise_threshold'] = max(0.8, old_noise - 1.0)
+                self.tracking_params['mask_threshold'] = max(0.1, old_mask - 0.2)
+                
+                changes_made = [
+                    f"window_size: {old_window} → {self.tracking_params['window_size']} (EMERGENCY +30)",
+                    f"flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f} (EMERGENCY -0.2)",
+                    f"learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f} (EMERGENCY +0.3)",
+                    f"flow_noise_threshold: {old_noise:.3f} → {self.tracking_params['flow_noise_threshold']:.3f} (EMERGENCY -1.0)",
+                    f"mask_threshold: {old_mask:.3f} → {self.tracking_params['mask_threshold']:.3f} (EMERGENCY -0.2)"
+                ]
+                
+                print(f"🔧 EMERGENCY CORRECTIONS APPLIED:")
+                for change in changes_made:
+                    print(f"🔧   {change}")
+                
+                return improved
+            
+            # GOOD IMPROVEMENT - Fine-tune parameters
+            elif iou_change > 0.02 and dice_change > 0.02:
+                print("🔧 Good improvement detected - fine-tuning parameters")
+                improved = True
+                
+                # Smaller, more conservative adjustments when things are working
                 old_window = self.tracking_params['window_size']
                 old_quality = self.tracking_params['flow_quality_threshold']
                 old_lr = self.tracking_params['learning_rate']
                 
-                self.tracking_params['window_size'] = min(100, self.tracking_params['window_size'] + 20)
-                self.tracking_params['flow_quality_threshold'] = max(0.2, self.tracking_params['flow_quality_threshold'] - 0.15)
-                self.tracking_params['learning_rate'] = min(0.9, self.tracking_params['learning_rate'] + 0.3)
+                self.tracking_params['window_size'] = min(100, old_window + 10)  # Smaller increase
+                self.tracking_params['flow_quality_threshold'] = max(0.3, old_quality - 0.05)  # Smaller decrease
+                self.tracking_params['learning_rate'] = min(0.8, old_lr + 0.1)  # Smaller increase
                 
-                print(f"🔧 COMPENSATING FOR IoU DROP:")
-                print(f"🔧   window_size: {old_window} → {self.tracking_params['window_size']}")
-                print(f"🔧   flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f}")
-                print(f"🔧   learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f}")
+                changes_made = [
+                    f"window_size: {old_window} → {self.tracking_params['window_size']} (fine-tune +10)",
+                    f"flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f} (fine-tune -0.05)",
+                    f"learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f} (fine-tune +0.1)"
+                ]
                 
-                return True
-            elif iou_change > 0.02:  # Good improvement
-                print("🔧 IoU improved - fine-tuning parameters")
+                print(f"🔧 FINE-TUNING APPLIED:")
+                for change in changes_made:
+                    print(f"🔧   {change}")
                 
-                old_window = self.tracking_params['window_size']
-                self.tracking_params['window_size'] = min(60, self.tracking_params['window_size'] + 5)
-                print(f"🔧 Fine-tuning window_size: {old_window} → {self.tracking_params['window_size']}")
+                return improved
+            
+            # STAGNATION - Try different parameter combinations
+            elif abs(iou_change) < 0.005 and abs(dice_change) < 0.005:
+                print("🔧 Performance stagnation detected - trying alternative parameter strategy")
+                improved = True
                 
-                return True
+                # Try adjusting different parameters when stuck
+                old_morph = self.tracking_params['morphology_kernel_size']
+                old_contour = self.tracking_params['contour_min_area']
+                old_border = self.tracking_params['border_constraint_weight']
+                old_decay = self.tracking_params['distance_decay_factor']
+                
+                # Focus on morphological and geometric parameters
+                self.tracking_params['morphology_kernel_size'] = max(3, old_morph - 1) if old_morph > 3 else min(9, old_morph + 2)
+                self.tracking_params['contour_min_area'] = max(10, old_contour - 20)
+                self.tracking_params['border_constraint_weight'] = max(0.4, old_border - 0.15)
+                self.tracking_params['distance_decay_factor'] = max(0.8, old_decay - 0.3)
+                
+                changes_made = [
+                    f"morphology_kernel_size: {old_morph} → {self.tracking_params['morphology_kernel_size']} (anti-stagnation)",
+                    f"contour_min_area: {old_contour} → {self.tracking_params['contour_min_area']} (anti-stagnation)",
+                    f"border_constraint_weight: {old_border:.3f} → {self.tracking_params['border_constraint_weight']:.3f} (anti-stagnation)",
+                    f"distance_decay_factor: {old_decay:.3f} → {self.tracking_params['distance_decay_factor']:.3f} (anti-stagnation)"
+                ]
+                
+                print(f"🔧 ANTI-STAGNATION STRATEGY APPLIED:")
+                for change in changes_made:
+                    print(f"🔧   {change}")
+                
+                return improved
+            
             else:
-                print(f"🔧 IoU change ({iou_change:+.4f}) not significant - no parameter changes")
+                print(f"🔧 Performance change ({iou_change:+.4f} IoU, {dice_change:+.4f} Dice) not significant enough for parameter changes")
         else:
             print(f"🔧 Not enough performance history yet ({len(self.performance_history)} entries)")
         
-        print(f"🔧 No parameter changes made this iteration")
-        return False
+        if not changes_made:
+            print(f"🔧 No parameter changes made this iteration")
+        
+        return improved
     
 class MultiFrameTracker:
     """
@@ -257,12 +369,23 @@ class MultiFrameTracker:
         # Use provided shared_params or create a new one
         self.shared_params = shared_params or SharedParams()
 
+        print(f"\n🔍 ===== MULTIFRAME TRACKER PARAMETER DEBUG =====")
+        print(f"🔍 MultiFrameTracker initialized with:")
+        print(f"🔍   shared_params provided: {shared_params is not None}")
+        if self.shared_params:
+           print(f"🔍   SharedParams version: {self.shared_params.version}")
+           print(f"🔍   Window size: {self.shared_params.tracking_params['window_size']}")
+           print(f"🔍   Flow quality: {self.shared_params.tracking_params['flow_quality_threshold']:.3f}")
+           print(f"🔍   Flow noise: {self.shared_params.tracking_params['flow_noise_threshold']:.3f}")
+           print(f"🔍   Mask threshold: {self.shared_params.tracking_params['mask_threshold']:.3f}")
+        print(f"🔍 ================================================\n")
+
         print(f"\n🔧 MultiFrameTracker using SharedParams v{self.shared_params.version}")
         print(f"🔧 Learning mode will be: {learning_mode if 'learning_mode' in locals() else 'unknown'}")
         print(f"🔧 ==========================================\n")
         
         # Increase window size for better propagation
-        if 'window_size' in self.shared_params.tracking_params:
+        if 'window_size' in self.shared_params.tracking_params and self.learning_mode:
             self.shared_params.tracking_params['window_size'] = max(50, self.shared_params.tracking_params['window_size'])
         
         # Performance metrics for the current run
@@ -727,7 +850,7 @@ class MultiFrameTracker:
                 end_frame, 
                 current['mask'], 
                 forward=True,
-                quality_threshold=0.4  # Relaxed threshold
+                #quality_threshold=0.4  # Relaxed threshold
             )
             
             # Track backward from next with relaxed quality threshold
@@ -736,7 +859,7 @@ class MultiFrameTracker:
                 start_frame, 
                 next_annotation['mask'], 
                 forward=False,
-                quality_threshold=0.4  # Relaxed threshold
+                #quality_threshold=0.4  # Relaxed threshold
             )
             
             self.logger.info(f"Forward tracking results: {len(forward_masks)} frames")
@@ -796,7 +919,7 @@ class MultiFrameTracker:
                 start_frame, 
                 next_annotation['mask'], 
                 forward=False,
-                quality_threshold=0.4  # Relaxed threshold
+            #quality_threshold=0.4  # Relaxed threshold
             )
             
             for frame_idx in range(start_frame + 1, end_frame):
@@ -817,7 +940,7 @@ class MultiFrameTracker:
                 end_frame, 
                 current['mask'], 
                 forward=True,
-                quality_threshold=0.4  # Relaxed threshold
+                #quality_threshold=0.4  # Relaxed threshold
             )
             
             for frame_idx in range(start_frame + 1, end_frame):
@@ -1034,21 +1157,35 @@ class MultiFrameTracker:
         print(f"Finished learning from {'no-fluid' if is_no_fluid else 'fluid'} annotation at frame {frame_idx}")
         return clear_frames
 
-    def _track_between_frames(self, start_frame, end_frame, initial_mask, forward=True, recursion_depth=0, quality_threshold=0.7):
+    def _track_between_frames(self, start_frame, end_frame, initial_mask, forward=True, recursion_depth=0):
         """
         Track a mask between two frames using optical flow.
-        
+        Now properly uses SharedParams for dynamic parameter adjustment.
+
         Args:
             start_frame: Starting frame index
             end_frame: Ending frame index
             initial_mask: Initial mask to track
             forward: Whether to track forward or backward
             recursion_depth: Current recursion depth
-            quality_threshold: Quality threshold for optical flow
             
         Returns:
-            List of tuples containing (frame_idx, frame, mask, flow, flow_mask, adjusted_mask)
+            Dictionary of tracked masks {frame_idx: mask}
         """
+
+        print(f"\n🔍 ===== _track_between_frames PARAMETER DEBUG =====")
+        print(f"🔍 About to call track_frames with SharedParams:")
+        print(f"🔍   SharedParams available: {self.shared_params is not None}")
+        if self.shared_params:
+            current_params = self.shared_params.tracking_params
+            print(f"🔍   Current SharedParams:")
+            print(f"🔍     Version: {self.shared_params.version}")
+            print(f"🔍     Flow quality: {current_params['flow_quality_threshold']:.3f}")
+            print(f"🔍     Flow noise: {current_params['flow_noise_threshold']:.3f}")
+            print(f"🔍     Mask threshold: {current_params['mask_threshold']:.3f}")
+            print(f"🔍     Window size: {current_params['window_size']}")
+        print(f"🔍 =================================================\n")
+
         # Check if we've exceeded our time limit
         elapsed_time = time.time() - self.start_time
         max_time = int(os.environ.get('MAX_PROCESSING_TIME', '300'))
@@ -1064,7 +1201,7 @@ class MultiFrameTracker:
             print(f"\n⚠️ WARNING: Maximum frame count reached ({self.processed_frames} > {max_frames})")
             print("Returning partial results to prevent endless loop")
             return {}
-        
+
         # Anti-recursion protection
         MAX_RECURSION_DEPTH = 10
         if recursion_depth >= MAX_RECURSION_DEPTH:
@@ -1073,10 +1210,10 @@ class MultiFrameTracker:
             print(f"  Forward tracking: {forward}")
             print(f"  Frame range size: {abs(end_frame - start_frame)}")
             return {}
-        
+
         # Validate frame range
         max_range = int(os.environ.get('MAX_TRACKING_FRAMES', '50'))
-        if abs(end_frame - start_frame) > max_range:  # Limit frame range size
+        if abs(end_frame - start_frame) > max_range:
             print(f"WARNING: Frame range too large ({abs(end_frame - start_frame)} > {max_range} frames).")
             print(f"  Limiting range to {max_range} frames")
             if forward:
@@ -1084,28 +1221,30 @@ class MultiFrameTracker:
             else:
                 end_frame = start_frame - max_range
             print(f"  New range: {start_frame} to {end_frame}")
-        
+
         print(f"\nStarting _track_between_frames (recursion_depth={recursion_depth}):")
         print(f"  start_frame: {start_frame}")
         print(f"  end_frame: {end_frame}")
         print(f"  forward: {forward}")
         print(f"  frame range size: {abs(end_frame - start_frame)}")
-        
+        print(f"  Using SharedParams v{self.shared_params.version}")
+
         # Create debug directory with timestamp for this tracking session
         debug_dir = os.path.join(self.debug_dir, f'track_{start_frame}_{end_frame}_{int(time.time())}')
         os.makedirs(debug_dir, exist_ok=True)
-        
+
         # Save initial mask and parameters
         cv2.imwrite(os.path.join(debug_dir, 'initial_mask.png'), (initial_mask * 255).astype(np.uint8))
         with open(os.path.join(debug_dir, 'tracking_params.txt'), 'w') as f:
             f.write(f"Start frame: {start_frame}\n")
             f.write(f"End frame: {end_frame}\n")
             f.write(f"Forward: {forward}\n")
+            f.write(f"SharedParams version: {self.shared_params.version}\n")
             f.write(f"Flow parameters:\n")
             for k, v in self.shared_params.tracking_params.items():
                 f.write(f"  {k}: {v}\n")
-        
-        # Track frames
+
+        # Track frames using SharedParams (NO hardcoded quality_threshold!)
         frames = track_frames(
             self.cap,
             start_frame,
@@ -1116,9 +1255,9 @@ class MultiFrameTracker:
             pbar=None,
             flow_processor=self.flow_processor,
             recursion_depth=recursion_depth,
-            quality_threshold=quality_threshold
+            shared_params=self.shared_params  # Pass SharedParams instead of hardcoded values!
         )
-        
+
         # Convert list to dictionary and analyze tracking quality
         frames_dict = {}
         for frame_data in frames:
@@ -1127,12 +1266,13 @@ class MultiFrameTracker:
                 frame = frame_data[1]
                 mask = frame_data[2]
                 
-                # Calculate mask statistics
-                mask_area = np.sum(mask > 0.5)
-                initial_area = np.sum(initial_mask > 0.5)
+                # Calculate mask statistics using SharedParams mask threshold
+                mask_threshold = self.shared_params.tracking_params['mask_threshold']
+                mask_area = np.sum(mask > mask_threshold)
+                initial_area = np.sum(initial_mask > mask_threshold)
                 area_ratio = mask_area / initial_area if initial_area > 0 else float('inf')
                 
-                # If mask area changes dramatically or moves too much, save debug info
+                # If mask area changes dramatically, save debug info
                 if area_ratio < 0.5 or area_ratio > 2.0:
                     debug_frame_dir = os.path.join(debug_dir, f'frame_{frame_idx}_anomaly')
                     os.makedirs(debug_frame_dir, exist_ok=True)
@@ -1141,17 +1281,21 @@ class MultiFrameTracker:
                     cv2.imwrite(os.path.join(debug_frame_dir, 'frame.png'), frame)
                     cv2.imwrite(os.path.join(debug_frame_dir, 'mask.png'), (mask * 255).astype(np.uint8))
                     
-                    # Save analysis
+                    # Save analysis with SharedParams info
                     with open(os.path.join(debug_frame_dir, 'analysis.txt'), 'w') as f:
                         f.write(f"Frame: {frame_idx}\n")
                         f.write(f"Initial mask area: {initial_area}\n")
                         f.write(f"Current mask area: {mask_area}\n")
                         f.write(f"Area ratio: {area_ratio:.2f}\n")
+                        f.write(f"SharedParams version: {self.shared_params.version}\n")
+                        f.write(f"Mask threshold used: {mask_threshold}\n")
                         
                     self.logger.warning(f"Frame {frame_idx}: Unusual mask behavior detected (area ratio: {area_ratio:.2f})")
                 
                 frames_dict[frame_idx] = mask
-    
+
+        print(f"✅ _track_between_frames completed with SharedParams v{self.shared_params.version}")
+        print(f"    Returned {len(frames_dict)} tracked frames")
         return frames_dict
     
     def _combine_masks(self, masks, weights=None):
