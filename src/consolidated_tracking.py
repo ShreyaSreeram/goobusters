@@ -3847,6 +3847,271 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
     print(f"✓ Saved final results to {final_results_path}")
     
     return results
+
+def run_adaptive_sampling_feedback_loop(target_videos, sampling_rates=[5, 10, 15, 20, 25], 
+                                      num_iterations_per_rate=1, matched_annotations=None, 
+                                      free_fluid_annotations=None, annotations_json=None, 
+                                      mdai_client=None, project_id=None, dataset_id=None,
+                                      label_id_ground_truth=None, label_id_fluid=None,
+                                      label_id_no_fluid=None, label_id_machine=None,
+                                      flow_processor=None, exam_id=None):
+    """
+    Run adaptive sampling feedback loop that varies sampling rates across iterations
+    to test parameter learning capabilities.
+    
+    Args:
+        target_videos: List of (video_path, study_uid, series_uid) tuples
+        sampling_rates: List of sampling rates to test in sequence
+        num_iterations_per_rate: How many iterations to run per sampling rate
+        ... (other args same as regular feedback loop)
+    
+    Returns:
+        Dictionary with detailed results showing parameter evolution
+    """
+    print("\n" + "="*80)
+    print("=== ADAPTIVE SAMPLING FEEDBACK LOOP ===")
+    print(f"Testing sampling rates: {sampling_rates}")
+    print(f"Iterations per rate: {num_iterations_per_rate}")
+    print(f"Exam ID: {exam_id}")
+    print("="*80 + "\n")
+    
+    # Create output directory
+    base_output_dir = os.path.join(OUTPUT_DIR, f"adaptive_sampling_loop_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    if exam_id:
+        base_output_dir = os.path.join(OUTPUT_DIR, f"adaptive_sampling_exam_{exam_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(base_output_dir, exist_ok=True)
+    
+    # Initialize shared parameters for learning across all rates
+    from src.multi_frame_tracking.multi_frame_tracker import SharedParams
+    shared_params = SharedParams()
+    
+    # Initialize flow processor
+    if flow_processor is None:
+        flow_processor = OpticalFlowProcessor(method=FLOW_METHOD[0])
+    
+    # Extract video paths and study/series pairs
+    video_paths = [v[0] for v in target_videos]
+    study_series_pairs = [(v[1], v[2]) for v in target_videos]
+    
+    results = {
+        'sampling_rates': sampling_rates,
+        'iterations_per_rate': num_iterations_per_rate,
+        'exam_id': exam_id,
+        'parameter_evolution': [],
+        'performance_evolution': [],
+        'rate_results': {}
+    }
+    
+    iteration_counter = 0
+    
+    # Test each sampling rate in sequence
+    for rate_idx, sampling_rate in enumerate(sampling_rates):
+        print(f"\n{'='*60}")
+        print(f"TESTING SAMPLING RATE: {sampling_rate} (every {sampling_rate}th frame)")
+        print(f"Rate {rate_idx + 1}/{len(sampling_rates)}")
+        print(f"{'='*60}")
+        
+        rate_results = {
+            'sampling_rate': sampling_rate,
+            'iterations': [],
+            'initial_params': shared_params.tracking_params.copy(),
+            'final_params': None,
+            'performance_change': None
+        }
+        
+        # Run multiple iterations at this sampling rate
+        for iter_in_rate in range(num_iterations_per_rate):
+            iteration_counter += 1
+            
+            print(f"\n--- Iteration {iteration_counter} (Rate {sampling_rate}, Sub-iteration {iter_in_rate + 1}) ---")
+            
+            # Create iteration output directory
+            iter_output_dir = os.path.join(base_output_dir, f"iteration_{iteration_counter}_rate_{sampling_rate}")
+            os.makedirs(iter_output_dir, exist_ok=True)
+            
+            # Log current parameters
+            print(f"Current parameters:")
+            print(f"  Window size: {shared_params.tracking_params['window_size']}")
+            print(f"  Flow quality threshold: {shared_params.tracking_params['flow_quality_threshold']:.3f}")
+            print(f"  Flow noise threshold: {shared_params.tracking_params['flow_noise_threshold']:.3f}")
+            print(f"  Mask threshold: {shared_params.tracking_params['mask_threshold']:.3f}")
+            
+            # Run evaluation with current sampling rate and parameters
+            try:
+                eval_results = evaluate_with_expert_feedback(
+                    video_paths, study_series_pairs, flow_processor,
+                    os.path.join(iter_output_dir, "evaluation"),
+                    mdai_client, project_id, dataset_id, 
+                    label_id_ground_truth,
+                    label_id_fluid,
+                    label_id_no_fluid,
+                    label_id_machine,
+                    annotations_json,
+                    args=None,
+                    shared_params=shared_params,
+                    learning_mode=True,  # Always enable learning
+                    iteration_number=iteration_counter,
+                    use_genuine_evaluation=False,
+                    sampling_rate=sampling_rate,  # Legacy parameter
+                    input_sampling_rate=sampling_rate,  # Key parameter
+                    evaluation_sampling_rate=1  # Always evaluate all frames
+                )
+                
+                # Extract performance metrics
+                if 'summary' in eval_results:
+                    current_iou = eval_results['summary']['overall_mean_iou']
+                    current_dice = eval_results['summary']['overall_mean_dice']
+                    print(f"Performance: IoU = {current_iou:.4f}, Dice = {current_dice:.4f}")
+                    
+                    # Store iteration results
+                    iteration_result = {
+                        'iteration': iteration_counter,
+                        'sampling_rate': sampling_rate,
+                        'sub_iteration': iter_in_rate + 1,
+                        'iou': current_iou,
+                        'dice': current_dice,
+                        'params_before': shared_params.tracking_params.copy(),
+                        'params_version_before': shared_params.version
+                    }
+                    
+                    # Update parameters based on performance
+                    print(f"Updating parameters based on IoU = {current_iou:.4f}...")
+                    improved = shared_params.update_from_feedback(eval_results['summary'])
+                    
+                    iteration_result.update({
+                        'params_after': shared_params.tracking_params.copy(),
+                        'params_version_after': shared_params.version,
+                        'params_improved': improved
+                    })
+                    
+                    # Log parameter changes
+                    if improved:
+                        print(f"✓ Parameters improved! New version: {shared_params.version}")
+                        print(f"  New window size: {shared_params.tracking_params['window_size']}")
+                        print(f"  New flow quality threshold: {shared_params.tracking_params['flow_quality_threshold']:.3f}")
+                    else:
+                        print(f"→ Parameters adjusted (version {shared_params.version})")
+                    
+                    # Save parameters for this iteration
+                    params_path = os.path.join(iter_output_dir, f"tracking_params_v{shared_params.version}.json")
+                    shared_params.save_to_file(params_path)
+                    
+                    rate_results['iterations'].append(iteration_result)
+                    results['parameter_evolution'].append(iteration_result)
+                    results['performance_evolution'].append({
+                        'iteration': iteration_counter,
+                        'sampling_rate': sampling_rate,
+                        'iou': current_iou,
+                        'dice': current_dice
+                    })
+                    
+                else:
+                    print("❌ No summary results from evaluation")
+                    
+            except Exception as e:
+                print(f"❌ Error in iteration {iteration_counter}: {str(e)}")
+                traceback.print_exc()
+                continue
+        
+        # Store final parameters for this rate
+        rate_results['final_params'] = shared_params.tracking_params.copy()
+        
+        # Calculate performance change within this rate
+        if len(rate_results['iterations']) > 1:
+            first_iou = rate_results['iterations'][0]['iou']
+            last_iou = rate_results['iterations'][-1]['iou']
+            rate_results['performance_change'] = last_iou - first_iou
+            print(f"\nRate {sampling_rate} summary:")
+            print(f"  Performance change: {first_iou:.4f} → {last_iou:.4f} (Δ = {rate_results['performance_change']:+.4f})")
+        
+        results['rate_results'][sampling_rate] = rate_results
+        
+        print(f"\nCompleted sampling rate {sampling_rate}")
+    
+    # Generate comprehensive report
+    create_adaptive_sampling_report(results, base_output_dir)
+    
+    # Save final results
+    final_results_path = os.path.join(base_output_dir, "adaptive_sampling_results.json")
+    with open(final_results_path, 'w') as f:
+        json.dump(convert_numpy_to_python(results), f, indent=2)
+    
+    print(f"\n✅ Adaptive sampling feedback loop completed!")
+    print(f"Results saved to: {base_output_dir}")
+    
+    return results
+
+def create_adaptive_sampling_report(results, output_dir):
+    """Create a detailed report of the adaptive sampling experiment"""
+    report_path = os.path.join(output_dir, "adaptive_sampling_report.md")
+    
+    with open(report_path, 'w') as f:
+        f.write("# Adaptive Sampling Parameter Learning Report\n\n")
+        f.write(f"**Exam ID:** {results['exam_id']}\n")
+        f.write(f"**Sampling Rates Tested:** {results['sampling_rates']}\n")
+        f.write(f"**Iterations per Rate:** {results['iterations_per_rate']}\n\n")
+        
+        # Parameter evolution summary
+        f.write("## Parameter Evolution Summary\n\n")
+        f.write("| Iteration | Sampling Rate | IoU | Window Size | Flow Quality | Flow Noise |\n")
+        f.write("|-----------|---------------|-----|-------------|--------------|------------|\n")
+        
+        for param_data in results['parameter_evolution']:
+            f.write(f"| {param_data['iteration']} | {param_data['sampling_rate']} | {param_data['iou']:.4f} | ")
+            f.write(f"{param_data['params_after']['window_size']} | ")
+            f.write(f"{param_data['params_after']['flow_quality_threshold']:.3f} | ")
+            f.write(f"{param_data['params_after']['flow_noise_threshold']:.3f} |\n")
+        
+        # Performance by sampling rate
+        f.write("\n## Performance by Sampling Rate\n\n")
+        for rate, rate_data in results['rate_results'].items():
+            f.write(f"### Sampling Rate: {rate}\n")
+            if rate_data['iterations']:
+                first_iou = rate_data['iterations'][0]['iou']
+                last_iou = rate_data['iterations'][-1]['iou']
+                f.write(f"- Initial IoU: {first_iou:.4f}\n")
+                f.write(f"- Final IoU: {last_iou:.4f}\n")
+                f.write(f"- Change: {last_iou - first_iou:+.4f}\n")
+            f.write("\n")
+        
+        # Learning insights
+        f.write("## Key Findings\n\n")
+        f.write("### Parameter Learning Evidence\n")
+        
+        # Check if parameters actually changed
+        if len(results['parameter_evolution']) > 1:
+            first_params = results['parameter_evolution'][0]['params_before']
+            last_params = results['parameter_evolution'][-1]['params_after']
+            
+            param_changes = []
+            for key in first_params:
+                if first_params[key] != last_params[key]:
+                    param_changes.append(f"- {key}: {first_params[key]} → {last_params[key]}")
+            
+            if param_changes:
+                f.write("Parameters that changed during learning:\n")
+                f.write("\n".join(param_changes))
+                f.write("\n\n")
+            else:
+                f.write("No parameter changes detected during learning.\n\n")
+        
+        # Compensation effect analysis
+        f.write("### Compensation Effect Analysis\n")
+        rate_performance = {}
+        for rate, rate_data in results['rate_results'].items():
+            if rate_data['iterations']:
+                avg_iou = np.mean([it['iou'] for it in rate_data['iterations']])
+                rate_performance[rate] = avg_iou
+        
+        if rate_performance:
+            best_rate = min(rate_performance.keys())
+            worst_rate = max(rate_performance.keys())
+            f.write(f"- Best performance (Rate {best_rate}): {rate_performance[best_rate]:.4f}\n")
+            f.write(f"- Worst performance (Rate {worst_rate}): {rate_performance[worst_rate]:.4f}\n")
+            f.write(f"- Performance gap: {rate_performance[best_rate] - rate_performance[worst_rate]:.4f}\n")
+    
+    print(f"Detailed report saved to: {report_path}")
+
 # ===== 8. MAIN EXECUTION =====
 def parse_arguments():
     """Parse command line arguments"""
@@ -3874,6 +4139,8 @@ def parse_arguments():
                        help='Upload results to MD.ai')
     parser.add_argument('--no-upload', action='store_true',
                        help='Skip uploading annotations to MD.ai')
+    
+    
     
     # Add arguments for study and series UIDs
     parser.add_argument('--study', type=str, help='Specific StudyInstanceUID to process')
@@ -4529,6 +4796,8 @@ if __name__ == "__main__":
     if args.images_dir:
        os.environ["MDAI_IMAGES_DIR"] = args.images_dir
        print(f"Using images directory: {args.images_dir}")
+
+    
     
 
     elif args.create_ground_truth:

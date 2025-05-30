@@ -65,6 +65,17 @@ class SharedParams:
         # Load parameters from file if provided
         if params_file and os.path.exists(params_file):
             self.load_from_file(params_file)
+       
+        print(f"\n🔧 SharedParams initialized:")
+        print(f"🔧   - Version: {self.version}")
+        print(f"🔧   - Window size: {self.tracking_params['window_size']}")
+        print(f"🔧   - Flow quality: {self.tracking_params['flow_quality_threshold']:.3f}")
+        print(f"🔧   - Learning rate: {self.tracking_params['learning_rate']:.3f}")
+        if params_file:
+            print(f"🔧   - Loaded from file: {params_file}")
+        else:
+            print(f"🔧   - Using default parameters")
+        print(f"🔧 ==========================================\n")
     
     def load_from_file(self, params_file):
         """Load parameters from a JSON file"""
@@ -93,6 +104,7 @@ class SharedParams:
         """Save parameters to a JSON file"""
         try:
             # Update version info
+            old_version = self.version
             self.version += 1
             self.last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
@@ -100,14 +112,19 @@ class SharedParams:
             data = {
                 'tracking_params': self.tracking_params,
                 'version': self.version,
-                'last_updated': self.last_updated
+                'last_updated': self.last_updated,
+                'performance_history': self.performance_history[-5:]  # Keep last 5 for reference
             }
             
             # Save to file
             with open(params_file, 'w') as f:
                 json.dump(data, f, indent=4)
                 
-            print(f"Saved parameters (version {self.version}) to {params_file}")
+            print(f"✅ PARAMETERS UPDATED: v{old_version} → v{self.version}")
+            print(f"   Window size: {self.tracking_params['window_size']}")
+            print(f"   Flow quality: {self.tracking_params['flow_quality_threshold']:.3f}")
+            print(f"   Learning rate: {self.tracking_params['learning_rate']:.3f}")
+            print(f"   Saved to: {params_file}")
             return True
         except Exception as e:
             print(f"Error saving parameters: {str(e)}")
@@ -116,51 +133,89 @@ class SharedParams:
     def update_from_feedback(self, metrics):
         """
         Update parameters based on feedback metrics.
-        
-        Args:
-            metrics: Dictionary containing performance metrics
-                     (e.g., iou_scores, dice_scores, etc.)
+        Enhanced for sparse sampling compensation.
         """
+        print(f"\n🔧 ===== PARAMETER LEARNING DEBUG =====")
+        print(f"🔧 update_from_feedback() called!")
+        print(f"🔧 Current IoU: {metrics.get('mean_iou', 0):.4f}")
+        print(f"🔧 Current Dice: {metrics.get('mean_dice', 0):.4f}")
+        print(f"🔧 Performance history length: {len(self.performance_history)}")
+        print(f"🔧 Current parameters:")
+        print(f"🔧   - window_size: {self.tracking_params['window_size']}")
+        print(f"🔧   - flow_quality_threshold: {self.tracking_params['flow_quality_threshold']:.3f}")
+        print(f"🔧   - learning_rate: {self.tracking_params['learning_rate']:.3f}")
+        print(f"🔧 ==========================================\n")
+        
         # Store performance history
         self.performance_history.append(metrics)
         
-        # Only update if we have enough history
-        if len(self.performance_history) < 2:
-            return False
-            
-        # Get current and previous metrics
-        current = metrics
-        previous = self.performance_history[-2]
+        current_iou = metrics.get('mean_iou', 0)
+        print(f"Current IoU: {current_iou:.4f}")
         
-        # Check for improvement
-        improved = False
-        
-        # Update flow parameters based on IoU improvement
-        if current.get('mean_iou', 0) > previous.get('mean_iou', 0):
+        # AGGRESSIVE: Always try to improve if IoU is below threshold
+        if current_iou < 0.6:  # Lowered threshold for aggressive adaptation
+            print(f"🔧 IoU below 0.6 - applying aggressive parameter adjustments")
             improved = True
-            # If IoU improved, slightly adjust flow parameters
-            adjustment = self.tracking_params['learning_rate'] * 0.1
             
-            # Example adaptive logic - can be expanded with more sophisticated rules
-            if current.get('mean_iou', 0) - previous.get('mean_iou', 0) > self.tracking_params['iou_improvement_threshold']:
-                # Significant improvement - increase window size for better propagation
-                self.tracking_params['window_size'] = min(50, self.tracking_params['window_size'] + 5)
-            else:
-                # Modest improvement - fine-tune thresholds
-                self.tracking_params['flow_noise_threshold'] *= (1.0 - adjustment)
-                self.tracking_params['mask_threshold'] = max(0.4, min(0.6, self.tracking_params['mask_threshold'] - adjustment))
+            # Increase window size significantly for better propagation
+            old_window = self.tracking_params['window_size']
+            self.tracking_params['window_size'] = min(80, old_window + 15)
+            print(f"🔧 Increased window_size: {old_window} → {self.tracking_params['window_size']}")
+            
+            # Relax quality thresholds for sparse sampling
+            old_quality = self.tracking_params['flow_quality_threshold']
+            self.tracking_params['flow_quality_threshold'] = max(0.3, old_quality - 0.1)
+            print(f"🔧 Relaxed flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f}")
+            
+            # Increase learning rate for faster adaptation
+            old_lr = self.tracking_params['learning_rate']
+            self.tracking_params['learning_rate'] = min(0.8, old_lr + 0.2)
+            print(f"🔧 Increased learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f}")
+            
+            print(f"🔧 AGGRESSIVE ADAPTATION COMPLETE - Parameters improved!")
+            return improved
         
-        # If performance degraded, revert some changes
-        elif current.get('mean_iou', 0) < previous.get('mean_iou', 0) * 0.9:  # >10% worse
-            # Reset window size if it's too large
-            if self.tracking_params['window_size'] > 30:
-                self.tracking_params['window_size'] = 30
+        # If we have history, compare with previous
+        if len(self.performance_history) >= 2:
+            previous_iou = self.performance_history[-2].get('mean_iou', 0)
+            iou_change = current_iou - previous_iou
+            
+            print(f"🔧 Previous IoU: {previous_iou:.4f}, Change: {iou_change:+.4f}")
+            
+            if iou_change < -0.05:  # IoU dropped significantly
+                print("🔧 Significant IoU drop detected - compensating")
                 
-            # Increase quality threshold to be more selective
-            self.tracking_params['flow_quality_threshold'] = min(0.9, self.tracking_params['flow_quality_threshold'] + 0.05)
+                # More aggressive compensation for IoU drops
+                old_window = self.tracking_params['window_size']
+                old_quality = self.tracking_params['flow_quality_threshold']
+                old_lr = self.tracking_params['learning_rate']
+                
+                self.tracking_params['window_size'] = min(100, self.tracking_params['window_size'] + 20)
+                self.tracking_params['flow_quality_threshold'] = max(0.2, self.tracking_params['flow_quality_threshold'] - 0.15)
+                self.tracking_params['learning_rate'] = min(0.9, self.tracking_params['learning_rate'] + 0.3)
+                
+                print(f"🔧 COMPENSATING FOR IoU DROP:")
+                print(f"🔧   window_size: {old_window} → {self.tracking_params['window_size']}")
+                print(f"🔧   flow_quality_threshold: {old_quality:.3f} → {self.tracking_params['flow_quality_threshold']:.3f}")
+                print(f"🔧   learning_rate: {old_lr:.3f} → {self.tracking_params['learning_rate']:.3f}")
+                
+                return True
+            elif iou_change > 0.02:  # Good improvement
+                print("🔧 IoU improved - fine-tuning parameters")
+                
+                old_window = self.tracking_params['window_size']
+                self.tracking_params['window_size'] = min(60, self.tracking_params['window_size'] + 5)
+                print(f"🔧 Fine-tuning window_size: {old_window} → {self.tracking_params['window_size']}")
+                
+                return True
+            else:
+                print(f"🔧 IoU change ({iou_change:+.4f}) not significant - no parameter changes")
+        else:
+            print(f"🔧 Not enough performance history yet ({len(self.performance_history)} entries)")
         
-        return improved
-
+        print(f"🔧 No parameter changes made this iteration")
+        return False
+    
 class MultiFrameTracker:
     """
     Implements multi-frame annotation tracking for ultrasound videos.
@@ -201,6 +256,10 @@ class MultiFrameTracker:
 
         # Use provided shared_params or create a new one
         self.shared_params = shared_params or SharedParams()
+
+        print(f"\n🔧 MultiFrameTracker using SharedParams v{self.shared_params.version}")
+        print(f"🔧 Learning mode will be: {learning_mode if 'learning_mode' in locals() else 'unknown'}")
+        print(f"🔧 ==========================================\n")
         
         # Increase window size for better propagation
         if 'window_size' in self.shared_params.tracking_params:
