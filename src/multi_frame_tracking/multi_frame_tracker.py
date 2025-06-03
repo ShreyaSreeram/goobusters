@@ -587,6 +587,9 @@ class MultiFrameTracker:
         for mask_type, count in mask_types.items():
             print(f"  {mask_type}: {count} frames")
         print(f"Expert annotations preserved: {expert_annotations}")
+
+        # ENFORCE no-fluid constraints as final step (ADD THIS)
+        all_masks = self._enforce_no_fluid_constraints(all_masks, annotations)
             
         return all_masks
     
@@ -1590,6 +1593,60 @@ class MultiFrameTracker:
         print(f"  Evaluated Frames: {len(common_frames)}")
         
         return metrics
+    
+    def _enforce_no_fluid_constraints(self, all_masks, annotations):
+        """Enforce no-fluid constraints as immutable rules - call this LAST"""
+    
+    # Find all no-fluid annotations
+        no_fluid_frames = [ann['frame'] for ann in annotations if ann.get('is_no_fluid', False)]
+    
+        if not no_fluid_frames:
+           return all_masks
+    
+        print(f"\n🚫 ENFORCING NO-FLUID CONSTRAINTS on {len(no_fluid_frames)} frames")
+    
+    # Create empty mask template
+        if annotations:
+           empty_mask = np.zeros_like(annotations[0]['mask'])
+        else:
+             empty_mask = np.zeros((480, 640), dtype=np.uint8)  # fallback
+    
+        violations_fixed = 0
+    
+    # Process regions between no-fluid annotations
+        if len(no_fluid_frames) >= 2:
+            sorted_frames = sorted(no_fluid_frames)
+            for i in range(len(sorted_frames) - 1):
+              start = sorted_frames[i]
+              end = sorted_frames[i + 1]
+            
+              print(f"🚫 Enforcing no-fluid region: frames {start} to {end}")
+            
+            # FORCE all frames in this range to be clear
+              for frame_idx in range(start, end + 1):
+                 if frame_idx in all_masks:
+                    current_mask = all_masks[frame_idx]
+                    if isinstance(current_mask, dict):
+                        current_sum = np.sum(current_mask.get('mask', empty_mask))
+                    else:
+                        current_sum = np.sum(current_mask)
+                    
+                    if current_sum > 0:
+                        print(f"🚫 VIOLATION FIXED: Frame {frame_idx} had mask sum {current_sum}, now 0")
+                        violations_fixed += 1
+                
+                # OVERWRITE with empty mask
+                 all_masks[frame_idx] = {
+                    'mask': empty_mask.copy(),
+                    'type': 'enforced_no_fluid',
+                    'source': 'no_fluid_constraint_enforcement',
+                    'is_annotation': False,
+                    'is_no_fluid': True,
+                    'immutable': True
+                }
+    
+        print(f"🚫 Fixed {violations_fixed} no-fluid constraint violations")
+        return all_masks
 
 # Function to prepare annotations for MD.ai upload
 def prepare_mdai_annotations(all_masks, study_uid, series_uid, label_id_fluid, label_id_machine):
@@ -1665,6 +1722,8 @@ def prepare_mdai_annotations(all_masks, study_uid, series_uid, label_id_fluid, l
             continue
     
     return annotations
+
+
 
 
 # This function has been moved to consolidated_tracking.py

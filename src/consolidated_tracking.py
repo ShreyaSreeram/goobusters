@@ -2695,12 +2695,13 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                                  label_id_machine=None, annotations_json=None, args=None,
                                  shared_params=None, learning_mode=False, iteration_number=1,
                                  use_genuine_evaluation=False, 
-                                 sampling_rate=10,              # ADD THIS LINE
-                                 input_sampling_rate=None,      # ADD THIS LINE
-                                 evaluation_sampling_rate=None): # ADD THIS LINE
+                                 sampling_rate=10,              
+                                 input_sampling_rate=None,      
+                                 evaluation_sampling_rate=None,
+                                 include_method_comparison=False): # NEW: Method comparison parameter
     """
     Evaluates the algorithm against expert-refined ground truth annotations
-    with support for iterative learning and feedback loop
+    with support for iterative learning and feedback loop, and optional method comparison
     
     Args:
         video_paths: List of video paths to process
@@ -2723,6 +2724,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
         sampling_rate: Legacy sampling rate (for backward compatibility)
         input_sampling_rate: Sampling rate for tracker INPUT
         evaluation_sampling_rate: Sampling rate for evaluation
+        include_method_comparison: Whether to run single vs multi-frame comparison
         
     Returns:
         Dictionary with evaluation results
@@ -2733,7 +2735,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
         input_sampling_rate = sampling_rate
     if evaluation_sampling_rate is None:
         evaluation_sampling_rate = 1  # Default to dense evaluation
-
+    
     # Debug output at the beginning
     print("\n" + "="*60)
     print("=== LABEL ID DEBUG IN evaluate_with_expert_feedback ===")
@@ -2741,6 +2743,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
     print(f"algorithm_label_id: {algorithm_label_id}")
     print(f"label_id_no_fluid: {label_id_no_fluid}")
     print(f"label_id_machine: {label_id_machine}")
+    print(f"include_method_comparison: {include_method_comparison}")  # NEW
     print("="*60 + "\n")
     
     evaluation_results = {}
@@ -2764,7 +2767,6 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             # ADD DEBUG CODE HERE
             print("\n=== DEBUGGING GROUND TRUTH ANNOTATIONS ===")
             print(f"Found {len(ground_truth_annotations)} ground truth annotations")
-
             if ground_truth_annotations:
                 # Check the first annotation
                 first_annotation = ground_truth_annotations[0]
@@ -2808,6 +2810,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             
             # UPDATED MASK CONVERSION SECTION - Handle both list and DataFrame inputs
             ground_truth_masks = {}
+            no_fluid_ground_truth_frames = set()  # Track no-fluid frames from ground truth
             
             print("\n=== PROCESSING GROUND TRUTH ANNOTATIONS ===")
             
@@ -2824,6 +2827,11 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                             is_no_fluid = True
                             print(f"Frame {frame_num}: No fluid annotation")
                     
+                    # ENHANCED: Also check labelId for explicit no-fluid
+                    if annotation.get('labelId') == label_id_no_fluid:
+                        is_no_fluid = True
+                        print(f"Frame {frame_num}: Explicit no-fluid label")
+                    
                     if is_no_fluid:
                         # For no-fluid frames, create an empty mask
                         mask = np.zeros((video_height, video_width), dtype=np.uint8)
@@ -2832,6 +2840,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                             'is_no_fluid': True,
                             'type': 'no_fluid'
                         }
+                        no_fluid_ground_truth_frames.add(frame_num)  # Track this frame
                     else:
                         # Try to get polygons from different possible fields
                         polygons = None
@@ -2860,18 +2869,9 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     process_annotation(annotation)
             
             print(f"\nProcessed {len(ground_truth_masks)} ground truth frames")
-            
-            # Initialize the multi-frame tracker with feedback loop settings
-            tracker = MultiFrameTracker(flow_processor, video_output_dir, debug_mode=False, shared_params=shared_params)
-            
-            # Enable feedback loop and learning mode if specified
-            if learning_mode:
-                tracker.feedback_loop_mode = True
-                tracker.learning_mode = True
-                print(f"✓ Feedback loop and learning mode enabled for iteration {iteration_number}")
-            
-            # Process using the existing workflow but with frame alignment
-            print("\n=== PROCESSING ALGORITHM MASKS ===")
+            print(f"No-fluid ground truth frames: {len(no_fluid_ground_truth_frames)}")
+            if no_fluid_ground_truth_frames:
+                print(f"No-fluid frame numbers: {sorted(list(no_fluid_ground_truth_frames))}")
             
             # Convert annotations to DataFrame if needed
             if not isinstance(ground_truth_annotations, pd.DataFrame):
@@ -2880,7 +2880,100 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             else:
                 annotations_df = ground_truth_annotations
             
-            algorithm_masks = tracker.process_annotations(annotations_df, video_path, study_uid, series_uid)
+            # Preprocess for tracker
+            annotations_df = preprocess_ground_truth_for_tracker(
+                ground_truth_annotations, video_path, study_uid, series_uid, 
+                feedback_loop=True, input_sampling_rate=input_sampling_rate
+            )
+            
+            print(f"🔍 After preprocessing: DataFrame has {len(annotations_df)} rows")
+            print(f"🔍 Input sampling rate used: {input_sampling_rate}")
+            
+            # Initialize the multi-frame tracker with feedback loop settings
+            from src.multi_frame_tracking.multi_frame_tracker import MultiFrameTracker
+            tracker = MultiFrameTracker(flow_processor, video_output_dir, debug_mode=False, shared_params=shared_params)
+            
+            # Enable feedback loop and learning mode if specified
+            if learning_mode:
+                tracker.feedback_loop_mode = True
+                tracker.learning_mode = True
+                print(f"✓ Feedback loop and learning mode enabled for iteration {iteration_number}")
+            
+            # Run multi-frame tracking (existing logic)
+            multi_frame_results = tracker.process_annotations(annotations_df, video_path, study_uid, series_uid)
+            
+            # NEW: METHOD COMPARISON SECTION
+            single_frame_results = None
+            comparison_metrics = None
+            
+            if include_method_comparison:
+                print(f"\n🔬 Running method comparison for {study_uid}/{series_uid}")
+                
+                try:
+                    # Import the single frame tracker
+                    from src.multi_frame_tracking.tracking_comparison import SingleFrameTracker, compare_single_vs_multi_frame
+                    
+                    # Run single-frame tracking
+                    single_tracker = SingleFrameTracker(flow_processor, video_output_dir, shared_params=shared_params)
+                    single_frame_results = single_tracker.process_single_annotation(
+                        annotations_df, video_path, study_uid, series_uid
+                    )
+                    
+                    # Compare the two methods
+                    comparison_metrics = compare_single_vs_multi_frame(single_frame_results, multi_frame_results)
+                    
+                    # Print quick summary
+                    print(f"   Single-frame predictions: {comparison_metrics.get('single_frame_count', 0)}")
+                    print(f"   Multi-frame predictions: {comparison_metrics.get('multi_frame_count', 0)}")
+                    print(f"   Method agreement IoU: {comparison_metrics.get('mean_iou', 0.0):.4f}")
+                    
+                except Exception as e:
+                    print(f"⚠️  Error in method comparison: {str(e)}")
+                    single_frame_results = None
+                    comparison_metrics = {'error': str(e)}
+            
+            # Use multi_frame_results as the main algorithm_masks for the rest of the evaluation
+            algorithm_masks = multi_frame_results
+            
+            # ENFORCE NO-FLUID CONSTRAINTS BEFORE ANY FURTHER PROCESSING
+            print(f"\n🚫 ENFORCING NO-FLUID CONSTRAINTS")
+            if no_fluid_ground_truth_frames:
+                print(f"🚫 Ground truth no-fluid frames: {sorted(list(no_fluid_ground_truth_frames))}")
+                
+                # Create empty mask template
+                empty_mask = np.zeros((video_height, video_width), dtype=np.uint8)
+                violations_fixed = 0
+                
+                # Force all ground truth no-fluid frames to be empty in algorithm results
+                for frame_idx in no_fluid_ground_truth_frames:
+                    if frame_idx in algorithm_masks:
+                        current_mask = algorithm_masks[frame_idx]
+                        
+                        # Check if current mask has content
+                        current_sum = 0
+                        if isinstance(current_mask, dict):
+                            mask_data = current_mask.get('mask', empty_mask)
+                            current_sum = np.sum(mask_data)
+                        else:
+                            current_sum = np.sum(current_mask)
+                        
+                        if current_sum > 0:
+                            print(f"🚫 VIOLATION FIXED: Frame {frame_idx} had mask sum {current_sum}, now 0")
+                            violations_fixed += 1
+                    
+                    # FORCE empty mask regardless
+                    algorithm_masks[frame_idx] = {
+                        'mask': empty_mask.copy(),
+                        'type': 'enforced_no_fluid',
+                        'source': 'no_fluid_constraint_enforcement',
+                        'is_annotation': False,
+                        'is_no_fluid': True,
+                        'immutable': True
+                    }
+                
+                print(f"🚫 Fixed {violations_fixed} no-fluid constraint violations")
+            else:
+                print("🚫 No ground truth no-fluid frames found")
             
             # Get frame ranges for alignment
             if algorithm_masks and ground_truth_masks:
@@ -2958,17 +3051,6 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             
             print("\n=== END DEBUGGING ===")
             
-            # Verify DataFrame conversion
-            if isinstance(annotations_df, pd.DataFrame):
-                print("\nDataFrame verification:")
-                print(f"  Columns: {annotations_df.columns.tolist()}")
-                print(f"  Rows: {len(annotations_df)}")
-                if len(annotations_df) > 0:
-                    print(f"  Sample row keys: {annotations_df.iloc[0].keys()}")
-            else:
-                print("\nWarning: annotations_df is not a DataFrame!")
-                print(f"Type: {type(annotations_df)}")
-            
             # Check what's being marked as annotations
             annotation_count = 0
             prediction_count = 0
@@ -2991,91 +3073,6 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             print(f"Annotations: {annotation_count}")
             print(f"Predictions: {prediction_count}")
             print(f"Clear frames: {clear_frame_count}")
-            
-            # Pass ground truth indices to help with proper frame mapping
-            ground_truth_indices = list(ground_truth_masks.keys()) if ground_truth_masks else None
-            
-            # Run the algorithm to generate new predictions
-            print("Running algorithm to generate new predictions...")
-            annotations_df = preprocess_ground_truth_for_tracker(
-                ground_truth_annotations, video_path, study_uid, series_uid, feedback_loop= True, input_sampling_rate=input_sampling_rate)
-            
-            print(f"🔍 After preprocessing: DataFrame has {len(annotations_df)} rows")
-            print(f"🔍 Input sampling rate used: {input_sampling_rate}")
-            
-            # Initialize the multi-frame tracker with feedback loop settings
-            tracker = MultiFrameTracker(flow_processor, video_output_dir, debug_mode=False, shared_params=shared_params)
-            
-            # Enable feedback loop and learning mode if specified
-            if learning_mode:
-                tracker.feedback_loop_mode = True
-                tracker.learning_mode = True
-                print(f"✓ Feedback loop and learning mode enabled for iteration {iteration_number}")
-            
-            # Process using the existing workflow
-            algorithm_masks = tracker.process_annotations(annotations_df, video_path, study_uid, series_uid)
-            
-            # Debug the tracker output
-            print("\n=== DEBUGGING MULTIFRAME TRACKER OUTPUT ===")
-            print(f"Total algorithm_masks returned: {len(algorithm_masks)}")
-            
-            # Check what's being marked as annotations
-            annotation_count = 0
-            prediction_count = 0
-            
-            for frame_idx, mask_info in algorithm_masks.items():
-                if isinstance(mask_info, dict):
-                    is_annotation = mask_info.get('is_annotation', False)
-                    mask_type = mask_info.get('type', 'unknown')
-                    
-                    if is_annotation:
-                        annotation_count += 1
-                        if annotation_count <= 5:  # Show first 5 annotations
-                            print(f"Frame {frame_idx}: ANNOTATION (type: {mask_type})")
-                    else:
-                        prediction_count += 1
-                        if prediction_count <= 5:  # Show first 5 predictions
-                            print(f"Frame {frame_idx}: PREDICTION (type: {mask_type})")
-            
-            print(f"\nSummary:")
-            print(f"Annotations (is_annotation=True): {annotation_count}")
-            print(f"Predictions (is_annotation=False): {prediction_count}")
-            print("=== END DEBUGGING ===\n")
-            
-            print(f"Generated {len(algorithm_masks)} algorithm masks")
-            
-            # Debug upload masks
-            print("=== DEBUGGING ALGORITHM MASKS FOR UPLOAD ===")
-            upload_summary = {
-                'total_frames': len(algorithm_masks),
-                'annotations': 0,
-                'clear_frames': 0,
-                'fluid_frames': 0
-            }
-            
-            for frame_idx, mask_info in algorithm_masks.items():
-                if isinstance(mask_info, dict):
-                    is_annotation = mask_info.get('is_annotation', False)
-                    mask_type = mask_info.get('type', '')
-                    
-                    if is_annotation:
-                        upload_summary['annotations'] += 1
-                    elif 'clear' in mask_type:
-                        upload_summary['clear_frames'] += 1
-                    else:
-                        # Get the mask
-                        if 'mask' in mask_info:
-                            mask = mask_info['mask']
-                            if isinstance(mask, np.ndarray) and np.sum(mask) > 0:
-                                upload_summary['fluid_frames'] += 1
-            
-            print(f"Upload summary:")
-            print(f"  Total frames: {upload_summary['total_frames']}")
-            print(f"  Annotations (skipped): {upload_summary['annotations']}")
-            print(f"  Clear frames: {upload_summary['clear_frames']}")
-            print(f"  Fluid frames with content: {upload_summary['fluid_frames']}")
-            print(f"  Expected uploads: {upload_summary['clear_frames'] + upload_summary['fluid_frames']}")
-            print("=== END UPLOAD DEBUG ===\n")
             
             # Upload algorithm predictions to MD.ai (with option to skip)
             if algorithm_masks and not (args and hasattr(args, 'no_upload') and args.no_upload):
@@ -3114,24 +3111,71 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                             # For fluid frames, check if mask has content
                             binary_mask = (mask > 0.5).astype(np.uint8)
                             if np.sum(binary_mask) > 0:
-                                # Convert mask to MD.ai format
-                                mask_data = mdai.common_utils.convert_mask_data(binary_mask)
-                                if mask_data:
+                                # Check - Don't upload fluid if it's a no-fluid ground truth frame
+                                if frame_idx in no_fluid_ground_truth_frames:
+                                    print(f"🚫 BLOCKED: Preventing fluid annotation on no-fluid ground truth frame {frame_idx}")
+                                    # Convert to no-fluid annotation instead
                                     annotation = {
-                                        'labelId': algorithm_label_id,
+                                        'labelId': label_id_no_fluid,
                                         'StudyInstanceUID': study_uid,
                                         'SeriesInstanceUID': series_uid,
                                         'frameNumber': int(frame_idx),
-                                        'data': mask_data,
                                         'groupId': label_id_machine,
-                                        'note': f'Fluid annotation (iteration {iteration_number})'
+                                        'note': f'Corrected to no-fluid (iteration {iteration_number})'
                                     }
                                     annotations_to_upload.append(annotation)
-                                    print(f"✓ Added fluid annotation for frame {frame_idx}")
+                                    print(f"✓ Added corrected no-fluid annotation for frame {frame_idx}")
+                                else:
+                                    # Convert mask to MD.ai format
+                                    mask_data = mdai.common_utils.convert_mask_data(binary_mask)
+                                    if mask_data:
+                                        annotation = {
+                                            'labelId': algorithm_label_id,
+                                            'StudyInstanceUID': study_uid,
+                                            'SeriesInstanceUID': series_uid,
+                                            'frameNumber': int(frame_idx),
+                                            'data': mask_data,
+                                            'groupId': label_id_machine,
+                                            'note': f'Fluid annotation (iteration {iteration_number})'
+                                        }
+                                        annotations_to_upload.append(annotation)
+                                        print(f"✓ Added fluid annotation for frame {frame_idx}")
                     
                     except Exception as e:
                         print(f"Error creating annotation for frame {frame_idx}: {str(e)}")
                         continue
+                
+                # FINAL VALIDATION BEFORE UPLOAD
+                print(f"\n🔍 FINAL VALIDATION: Checking {len(annotations_to_upload)} annotations before upload")
+                validated_annotations = []
+                validation_fixes = 0
+                
+                for annotation in annotations_to_upload:
+                    frame_idx = annotation['frameNumber']
+                    
+                    # Check if this frame should be no-fluid according to ground truth
+                    if frame_idx in no_fluid_ground_truth_frames:
+                        if annotation['labelId'] == algorithm_label_id:
+                            print(f"🚫 FINAL VALIDATION FIX: Frame {frame_idx} should be no-fluid but was marked as fluid")
+                            validation_fixes += 1
+                            # Force to no-fluid
+                            annotation = {
+                                'labelId': label_id_no_fluid,
+                                'StudyInstanceUID': annotation['StudyInstanceUID'],
+                                'SeriesInstanceUID': annotation['SeriesInstanceUID'],
+                                'frameNumber': annotation['frameNumber'],
+                                'groupId': annotation['groupId'],
+                                'note': f'Final validation correction to no-fluid (iteration {iteration_number})'
+                            }
+                    
+                    validated_annotations.append(annotation)
+                
+                if validation_fixes > 0:
+                    print(f"🚫 FINAL VALIDATION: Fixed {validation_fixes} violations")
+                else:
+                    print("✅ FINAL VALIDATION: No violations found")
+                
+                annotations_to_upload = validated_annotations
                 
                 # Upload to MD.ai
                 if annotations_to_upload:
@@ -3163,7 +3207,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 else:
                     print("No algorithm masks generated")
             
-            # DATA LEAKAGE CHECK - NEW SECTION
+            # DATA LEAKAGE CHECK
             print("\n🔍 DATA LEAKAGE CHECK:")
             annotation_frames = []
             prediction_frames = []
@@ -3184,7 +3228,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             if len(overlap) > 0:
                 print("🚨 DATA LEAKAGE DETECTED: Excluding memorized frames from evaluation!")
             
-            # EXTRACT MASKS FOR EVALUATION (EXCLUDING MEMORIZED FRAMES) - UPDATED SECTION
+            # EXTRACT MASKS FOR EVALUATION (EXCLUDING MEMORIZED FRAMES)
             print("\n=== EXTRACTING MASKS FOR EVALUATION (EXCLUDING MEMORIZED FRAMES) ===")
             
             # Extract only PREDICTED masks (exclude memorized annotations)
@@ -3213,17 +3257,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             # Find common frames for evaluation (excluding memorized frames)
             common_frames = set(algorithm_masks_clean.keys()) & set(ground_truth_masks_clean.keys())
             print(f"Common frames for GENUINE evaluation: {len(common_frames)}")
-
-            print("\n=== GROUND TRUTH FRAMES ===")
-            gt_frames = sorted(list(ground_truth_masks_clean.keys()))
-            print(f"Ground truth frames: {len(ground_truth_masks_clean)} total")
-            print(f"Sample frames: {gt_frames[:10]}... to ...{gt_frames[-10:]}")
-
-            print("\n=== ALGORITHM FRAMES AFTER CORRECTION ===")
-            algo_frames = sorted(list(algorithm_masks_clean.keys()))
-            print(f"Algorithm frames: {len(algorithm_masks_clean)} total")
-            print(f"Sample frames: {algo_frames[:10]}... to ...{algo_frames[-10:]}")
-
+            
             # Try additional offsets if needed
             if len(common_frames) < min(len(algorithm_masks_clean), len(ground_truth_masks_clean)) // 2:
                print("Testing additional offsets:")
@@ -3402,6 +3436,97 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     'iou_over_0.7': 0.0
                 }
             
+            # NEW: SINGLE-FRAME GROUND TRUTH EVALUATION (if method comparison enabled)
+            if include_method_comparison and single_frame_results:
+                print(f"\n📊 EVALUATING SINGLE-FRAME VS GROUND TRUTH")
+                
+                # Extract only PREDICTED frames from single-frame results (exclude memorized)
+                single_frame_masks_clean = {}
+                single_frame_annotation_frames = []
+                
+                for frame_idx, mask_info in single_frame_results.items():
+                    # Skip frames that were used as input annotations
+                    if isinstance(mask_info, dict) and mask_info.get('is_annotation', False):
+                        single_frame_annotation_frames.append(frame_idx)
+                        print(f"Excluding single-frame memorized frame {frame_idx} from evaluation")
+                        continue
+                    
+                    # Extract the actual predicted mask
+                    if isinstance(mask_info, dict):
+                        mask = mask_info.get('mask')
+                        if mask is None:
+                            continue
+                    else:
+                        mask = mask_info
+                    
+                    if isinstance(mask, np.ndarray):
+                        single_frame_masks_clean[frame_idx] = mask
+                
+                print(f"Single-frame: {len(single_frame_masks_clean)} predicted frames for evaluation")
+                print(f"Single-frame: {len(single_frame_annotation_frames)} memorized frames excluded")
+                
+                # Find common frames between single-frame predictions and ground truth
+                single_common_frames = set(single_frame_masks_clean.keys()) & set(ground_truth_masks_clean.keys())
+                print(f"Single-frame: {len(single_common_frames)} common frames with ground truth")
+                
+                # Evaluate single-frame against ground truth
+                if single_common_frames:
+                    single_algo_subset = {}
+                    single_gt_subset = {}
+                    
+                    for frame_idx in single_common_frames:
+                        # Get single-frame mask
+                        single_mask = single_frame_masks_clean[frame_idx]
+                        single_algo_subset[frame_idx] = single_mask
+                        
+                        # Get ground truth mask
+                        gt_mask = ground_truth_masks_clean[frame_idx]
+                        if isinstance(gt_mask, dict) and 'mask' in gt_mask:
+                            single_gt_subset[frame_idx] = gt_mask['mask']
+                        else:
+                            single_gt_subset[frame_idx] = gt_mask
+                    
+                    print(f"Evaluating single-frame on {len(single_algo_subset)} predicted frames")
+                    single_frame_metrics = evaluate_with_iou(single_algo_subset, single_gt_subset)
+                    
+                    print(f"🎯 SINGLE-FRAME vs Ground Truth:")
+                    print(f"   Mean IoU: {single_frame_metrics.get('mean_iou', 0.0):.4f}")
+                    print(f"   Mean Dice: {single_frame_metrics.get('mean_dice', 0.0):.4f}")
+                    print(f"   Frames IoU > 0.7: {single_frame_metrics.get('iou_over_0.7', 0.0)*100:.1f}%")
+                    
+                else:
+                    print("No common frames between single-frame predictions and ground truth!")
+                    single_frame_metrics = {
+                        'mean_iou': 0.0,
+                        'median_iou': 0.0,
+                        'mean_dice': 0.0,
+                        'iou_over_0.7': 0.0
+                    }
+                
+                # Add single-frame metrics to comparison results
+                if comparison_metrics and 'error' not in comparison_metrics:
+                    comparison_metrics['single_frame_vs_gt'] = single_frame_metrics
+                    comparison_metrics['multi_frame_vs_gt'] = metrics  # This is your existing multi-frame metrics
+                    
+                    # Print comparison summary
+                    print(f"\n🏆 PERFORMANCE COMPARISON:")
+                    multi_iou = metrics.get('mean_iou', 0.0)
+                    single_iou = single_frame_metrics.get('mean_iou', 0.0)
+                    improvement = ((multi_iou - single_iou) / single_iou * 100) if single_iou > 0 else 0
+                    
+                    print(f"   Multi-frame Mean IoU: {multi_iou:.4f}")
+                    print(f"   Single-frame Mean IoU: {single_iou:.4f}")
+                    print(f"   Multi-frame improvement: {improvement:+.1f}%")
+                    
+                    # Add improvement metrics
+                    comparison_metrics['performance_improvement'] = {
+                        'multi_frame_iou': multi_iou,
+                        'single_frame_iou': single_iou,
+                        'iou_improvement_percent': improvement,
+                        'multi_frame_dice': metrics.get('mean_dice', 0.0),
+                        'single_frame_dice': single_frame_metrics.get('mean_dice', 0.0)
+                    }
+            
             # EVALUATION SUMMARY
             print(f"\n📊 EVALUATION SUMMARY:")
             print(f"Total algorithm frames: {len(algorithm_masks)}")
@@ -3433,10 +3558,11 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     'flow_quality_threshold': shared_params.tracking_params['flow_quality_threshold'],
                     'border_constraint_weight': shared_params.tracking_params['border_constraint_weight']
                 }
-                
-            # Store results
-            evaluation_results[f"{study_uid}_{series_uid}"] = {
+            
+            # Store results with method comparison if available
+            result_data = {
                 'metrics': metrics,
+                'multi_frame_results': multi_frame_results,
                 'ground_truth_count': len(ground_truth_masks_clean),
                 'algorithm_mask_count': len(algorithm_masks_clean),
                 'memorized_frames_excluded': len(annotation_frames),
@@ -3444,6 +3570,28 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 'iteration': iteration_number,
                 'learning_mode': learning_mode
             }
+            
+            # NEW: Add method comparison results if available
+            if include_method_comparison:
+                result_data['single_frame_results'] = single_frame_results
+                result_data['method_comparison'] = comparison_metrics
+                
+                # Print method comparison summary
+                if comparison_metrics and 'error' not in comparison_metrics:
+                    print(f"\n🔬 METHOD COMPARISON SUMMARY:")
+                    print(f"Single-frame predictions: {comparison_metrics.get('single_frame_count', 0)}")
+                    print(f"Multi-frame predictions: {comparison_metrics.get('multi_frame_count', 0)}")
+                    print(f"Method agreement IoU: {comparison_metrics.get('mean_iou', 0.0):.4f}")
+                    print(f"Method agreement Dice: {comparison_metrics.get('mean_dice', 0.0):.4f}")
+                    
+                    # Print performance improvement if available
+                    if 'performance_improvement' in comparison_metrics:
+                        perf = comparison_metrics['performance_improvement']
+                        print(f"Multi-frame vs Ground Truth IoU: {perf.get('multi_frame_iou', 0.0):.4f}")
+                        print(f"Single-frame vs Ground Truth IoU: {perf.get('single_frame_iou', 0.0):.4f}")
+                        print(f"Performance improvement: {perf.get('iou_improvement_percent', 0.0):+.1f}%")
+            
+            evaluation_results[f"{study_uid}_{series_uid}"] = result_data
             
             # Generate a report for this video
             report_path = os.path.join(video_output_dir, "evaluation_report.md")
@@ -3454,18 +3602,44 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     f.write(f"- Algorithm Masks (Total): {len(algorithm_masks)}\n")
                     f.write(f"- Algorithm Masks (Predicted): {len(algorithm_masks_clean)}\n")
                     f.write(f"- Memorized Frames (Excluded): {len(annotation_frames)}\n")
-                    f.write(f"- Common Frames: {len(common_frames)}\n\n")
+                    f.write(f"- Common Frames: {len(common_frames)}\n")
+                    f.write(f"- Method Comparison: {'Enabled' if include_method_comparison else 'Disabled'}\n\n")
                     
                     f.write("## Data Leakage Prevention\n\n")
                     f.write(f"- Memorized annotation frames excluded: {len(annotation_frames)}\n")
                     f.write(f"- Only predicted frames used for evaluation: {len(algorithm_masks_clean)}\n")
                     f.write(f"- Overlap between GT and memorized: {len(overlap)}\n\n")
                     
+                    f.write("## No-Fluid Constraint Enforcement\n\n")
+                    f.write(f"- Ground truth no-fluid frames: {len(no_fluid_ground_truth_frames)}\n")
+                    f.write(f"- No-fluid frames enforced: {sorted(list(no_fluid_ground_truth_frames))}\n\n")
+                    
                     f.write("## Evaluation Metrics (GENUINE)\n\n")
                     f.write(f"- Mean IoU: {metrics.get('mean_iou', 0.0):.4f}\n")
                     f.write(f"- Median IoU: {metrics.get('median_iou', 0.0):.4f}\n")
                     f.write(f"- Mean Dice: {metrics.get('mean_dice', 0.0):.4f}\n")
                     f.write(f"- % Frames IoU > 0.7: {metrics.get('iou_over_0.7', 0.0)*100:.1f}%\n\n")
+                    
+                    # NEW: Add method comparison section
+                    if include_method_comparison and comparison_metrics:
+                        f.write("## Method Comparison\n\n")
+                        if 'error' in comparison_metrics:
+                            f.write(f"- Error: {comparison_metrics['error']}\n\n")
+                        else:
+                            f.write(f"- Single-frame predictions: {comparison_metrics.get('single_frame_count', 0)}\n")
+                            f.write(f"- Multi-frame predictions: {comparison_metrics.get('multi_frame_count', 0)}\n")
+                            f.write(f"- Method agreement IoU: {comparison_metrics.get('mean_iou', 0.0):.4f}\n")
+                            f.write(f"- Method agreement Dice: {comparison_metrics.get('mean_dice', 0.0):.4f}\n")
+                            
+                            # Add performance comparison if available
+                            if 'performance_improvement' in comparison_metrics:
+                                perf = comparison_metrics['performance_improvement']
+                                f.write(f"\n### Performance Against Ground Truth\n\n")
+                                f.write(f"- Multi-frame vs GT IoU: {perf.get('multi_frame_iou', 0.0):.4f}\n")
+                                f.write(f"- Single-frame vs GT IoU: {perf.get('single_frame_iou', 0.0):.4f}\n")
+                                f.write(f"- Multi-frame improvement: {perf.get('iou_improvement_percent', 0.0):+.1f}%\n")
+                                f.write(f"- Multi-frame vs GT Dice: {perf.get('multi_frame_dice', 0.0):.4f}\n")
+                                f.write(f"- Single-frame vs GT Dice: {perf.get('single_frame_dice', 0.0):.4f}\n\n")
                     
                     if 'error' in metrics:
                         f.write(f"**Error in metrics calculation:** {metrics['error']}\n\n")
@@ -3511,11 +3685,35 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 'overall_mean_iou': np.mean([r['metrics'].get('mean_iou', 0.0) for r in valid_results]),
                 'overall_mean_dice': np.mean([r['metrics'].get('mean_dice', 0.0) for r in valid_results]),
                 'total_memorized_frames_excluded': sum([r.get('memorized_frames_excluded', 0) for r in valid_results]),
+                'method_comparison_enabled': include_method_comparison,  # NEW
                 'best_video': max([(k, v['metrics'].get('mean_iou', 0.0)) for k, v in evaluation_results.items() 
                                 if 'metrics' in v], key=lambda x: x[1])[0],
                 'worst_video': min([(k, v['metrics'].get('mean_iou', 0.0)) for k, v in evaluation_results.items() 
                                     if 'metrics' in v], key=lambda x: x[1])[0]
             }
+            
+            # NEW: Add method comparison summary if enabled
+            if include_method_comparison:
+                comparison_results = [r.get('method_comparison', {}) for r in valid_results 
+                                    if 'method_comparison' in r and 'error' not in r.get('method_comparison', {})]
+                if comparison_results:
+                    summary['method_comparison_summary'] = {
+                        'videos_compared': len(comparison_results),
+                        'avg_method_agreement_iou': np.mean([c.get('mean_iou', 0.0) for c in comparison_results]),
+                        'avg_single_frame_count': np.mean([c.get('single_frame_count', 0) for c in comparison_results]),
+                        'avg_multi_frame_count': np.mean([c.get('multi_frame_count', 0) for c in comparison_results])
+                    }
+                    
+                    # Add performance improvement summary
+                    perf_results = [c.get('performance_improvement', {}) for c in comparison_results 
+                                   if 'performance_improvement' in c]
+                    if perf_results:
+                        summary['performance_improvement_summary'] = {
+                            'avg_multi_frame_iou': np.mean([p.get('multi_frame_iou', 0.0) for p in perf_results]),
+                            'avg_single_frame_iou': np.mean([p.get('single_frame_iou', 0.0) for p in perf_results]),
+                            'avg_improvement_percent': np.mean([p.get('iou_improvement_percent', 0.0) for p in perf_results])
+                        }
+                
         except Exception as e:
             print(f"Error generating evaluation summary: {str(e)}")
             summary = {
@@ -3524,6 +3722,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 'overall_mean_iou': 0.0,
                 'overall_mean_dice': 0.0,
                 'total_memorized_frames_excluded': 0,
+                'method_comparison_enabled': include_method_comparison,
                 'error': str(e)
             }
         
@@ -3533,31 +3732,78 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
         report_path = os.path.join(output_dir, "overall_evaluation_report.md")
         try:
             with open(report_path, 'w') as f:
-                f.write("# Overall Evaluation Report (Data Leakage Prevention)\n\n")
+                f.write("# Overall Evaluation Report (Data Leakage Prevention & No-Fluid Enforcement)\n\n")
                 f.write(f"- Total Videos: {summary['total_videos']}\n")
                 f.write(f"- Successful Evaluations: {summary['successful_evaluations']}\n")
                 f.write(f"- Total Memorized Frames Excluded: {summary.get('total_memorized_frames_excluded', 0)}\n")
+                f.write(f"- Method Comparison: {'Enabled' if summary.get('method_comparison_enabled', False) else 'Disabled'}\n")
                 f.write(f"- Overall Mean IoU (GENUINE): {summary.get('overall_mean_iou', 0.0):.4f}\n")
                 f.write(f"- Overall Mean Dice (GENUINE): {summary.get('overall_mean_dice', 0.0):.4f}\n")
                 f.write(f"- Best Performing Video: {summary.get('best_video', 'N/A')}\n")
                 f.write(f"- Worst Performing Video: {summary.get('worst_video', 'N/A')}\n\n")
                 
+                # NEW: Add method comparison summary section
+                if include_method_comparison and 'method_comparison_summary' in summary:
+                    mc_summary = summary['method_comparison_summary']
+                    f.write("## Method Comparison Summary\n\n")
+                    f.write(f"- Videos with successful comparison: {mc_summary.get('videos_compared', 0)}\n")
+                    f.write(f"- Average method agreement IoU: {mc_summary.get('avg_method_agreement_iou', 0.0):.4f}\n")
+                    f.write(f"- Average single-frame predictions per video: {mc_summary.get('avg_single_frame_count', 0.0):.1f}\n")
+                    f.write(f"- Average multi-frame predictions per video: {mc_summary.get('avg_multi_frame_count', 0.0):.1f}\n\n")
+                    
+                    # Add performance improvement summary
+                    if 'performance_improvement_summary' in summary:
+                        perf_summary = summary['performance_improvement_summary']
+                        f.write("## Performance Improvement Summary\n\n")
+                        f.write(f"- Average Multi-frame IoU vs GT: {perf_summary.get('avg_multi_frame_iou', 0.0):.4f}\n")
+                        f.write(f"- Average Single-frame IoU vs GT: {perf_summary.get('avg_single_frame_iou', 0.0):.4f}\n")
+                        f.write(f"- Average Multi-frame Improvement: {perf_summary.get('avg_improvement_percent', 0.0):+.1f}%\n\n")
+                
                 f.write("## Data Leakage Prevention Summary\n\n")
                 f.write("This evaluation excludes all frames that were used as input annotations (memorized frames)\n")
                 f.write("to ensure genuine algorithm performance assessment.\n\n")
                 
+                f.write("## No-Fluid Constraint Enforcement\n\n")
+                f.write("All frames marked as 'no fluid' in ground truth are enforced to have empty masks\n")
+                f.write("in the algorithm output, preventing incorrect fluid annotations on clear frames.\n\n")
+                
                 f.write("## Per-Video Results (GENUINE)\n\n")
-                f.write("| Video | Mean IoU | Mean Dice | IoU > 0.7 | Excluded Frames |\n")
-                f.write("|-------|----------|-----------|-----------|------------------|\n")
+                header = "| Video | Mean IoU | Mean Dice | IoU > 0.7 | Excluded Frames | Method Comparison |"
+                if include_method_comparison:
+                    header += " Multi-IoU | Single-IoU | Improvement |"
+                header += "\n"
+                f.write(header)
+                
+                separator = "|-------|----------|-----------|-----------|------------------|-------------------|"
+                if include_method_comparison:
+                    separator += "----------|------------|-------------|"
+                separator += "\n"
+                f.write(separator)
                 
                 for video_id, results in evaluation_results.items():
                     if video_id != 'summary' and 'metrics' in results:
                         metrics = results['metrics']
                         excluded = results.get('memorized_frames_excluded', 0)
+                        has_comparison = 'method_comparison' in results
+                        comparison_status = "✓" if has_comparison else "✗"
+                        
                         try:
-                            f.write(f"| {video_id} | {metrics.get('mean_iou', 0.0):.4f} | {metrics.get('mean_dice', 0.0):.4f} | {metrics.get('iou_over_0.7', 0.0)*100:.1f}% | {excluded} |\n")
+                            row = f"| {video_id} | {metrics.get('mean_iou', 0.0):.4f} | {metrics.get('mean_dice', 0.0):.4f} | {metrics.get('iou_over_0.7', 0.0)*100:.1f}% | {excluded} | {comparison_status} |"
+                            
+                            if include_method_comparison and has_comparison:
+                                comp = results.get('method_comparison', {})
+                                if 'performance_improvement' in comp:
+                                    perf = comp['performance_improvement']
+                                    row += f" {perf.get('multi_frame_iou', 0.0):.4f} | {perf.get('single_frame_iou', 0.0):.4f} | {perf.get('iou_improvement_percent', 0.0):+.1f}% |"
+                                else:
+                                    row += " N/A | N/A | N/A |"
+                            elif include_method_comparison:
+                                row += " N/A | N/A | N/A |"
+                            
+                            row += "\n"
+                            f.write(row)
                         except Exception as e:
-                            f.write(f"| {video_id} | Error: {str(e)} | | | |\n")
+                            f.write(f"| {video_id} | Error: {str(e)} | | | | | | | |\n")
             
             print(f"Overall evaluation report saved to: {report_path}")
         except Exception as e:
@@ -3580,7 +3826,7 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
                                  label_id_ground_truth=None, label_id_fluid=None,
                                  label_id_no_fluid=None, label_id_machine=None,
                                  flow_processor=None, exam_id=None, learning_mode=False,
-                                 params_file=None, use_genuine_evaluation=False, sampling_rate=10, input_sampling_rate= None, evaluation_sampling_rate=None):
+                                 params_file=None, use_genuine_evaluation=False, sampling_rate=10, input_sampling_rate= None, evaluation_sampling_rate=None, include_method_comparison=False):
     """
     Runs the complete feedback loop for ground truth creation and evaluation
     """
@@ -3795,16 +4041,17 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
                 label_id_no_fluid,       # No fluid label ID
                 label_id_machine,        # Machine group label ID
                 annotations_json, 
-                args=None,
+                args=args,
                 shared_params=shared_params,
                 learning_mode=learning_mode,
                 iteration_number=iteration+1,
+                include_method_comparison=include_method_comparison,
                 use_genuine_evaluation=use_genuine_evaluation,
                 sampling_rate=sampling_rate,
                 input_sampling_rate=input_sampling_rate,
                 evaluation_sampling_rate=evaluation_sampling_rate
-
-            )
+               )
+            
             print(f"Evaluation completed successfully for iteration {iteration+1}")
         except Exception as e:
             print(f"Error during evaluation for iteration {iteration+1}: {str(e)}")
@@ -4139,6 +4386,7 @@ def parse_arguments():
                        help='Upload results to MD.ai')
     parser.add_argument('--no-upload', action='store_true',
                        help='Skip uploading annotations to MD.ai')
+    parser.add_argument('--compare-methods', action='store_true', help='Enable single vs multi-frame method comparison')
     
     
     
@@ -4785,6 +5033,7 @@ if __name__ == "__main__":
             params_file=args.params_file,
             use_genuine_evaluation=args.genuine_evaluation,
             sampling_rate=args.sampling_rate,
+            include_method_comparison=args.compare_methods,
             input_sampling_rate=getattr(args, 'input_sampling_rate', args.sampling_rate),      
     evaluation_sampling_rate=getattr(args, 'eval_sampling_rate', 1)
         )
@@ -5311,7 +5560,7 @@ if __name__ == "__main__":
                         project_id=PROJECT_ID,
                         dataset_id=DATASET_ID,
                         ground_truth_label_id=LABEL_ID_GROUND_TRUTH,
-                        matched_annotations=free_fluid_annotations,  # Pass the filtered annotations
+                        matched_annotations=free_fluid_annotations,  
                         free_fluid_annotations=free_fluid_annotations,
                         label_id_fluid=LABEL_ID_FREE_FLUID, 
                         label_id_no_fluid=LABEL_ID_NO_FLUID,
