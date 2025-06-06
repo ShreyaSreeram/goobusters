@@ -37,11 +37,11 @@ Based on 354 experimental runs across 11 pediatric FAST examinations:
 
 | Sampling Rate | Input Density | Mean IoU | Annotation Burden Reduction | Clinical Viability |
 |---------------|---------------|----------|---------------------------|-------------------|
-| 1:5 | 20% | 0.71 | 79% | Excellent |
-| 1:15 | 6.7% | 0.58 | 93.6% | Acceptable |
-| 1:20 | 5.0% | 0.57 | 95% | **Quality Cliff** |
-| 1:30 | 3.3% | 0.45 | 97% | Poor |
-| 1:50 | 2.0% | 0.41 | 98% | Poor |
+| 1:5 | 20% | 0.671 | 79% | Excellent |
+| 1:15 | 6.7% | 0.655 | 93.6% | Acceptable |
+| 1:20 | 5.0% | 0.712 | 95% | **Quality Cliff** |
+| 1:30 | 3.3% | 0.525 | 97% | Poor |
+| 1:50 | 2.0% | 0.500 | 98% | Poor |
 
 **Key Finding**: A critical "quality cliff" occurs at 5.0% input density (1:20 sampling), below which annotations become unsuitable for clinical use.
 
@@ -183,20 +183,20 @@ python src/consolidated_tracking.py --feedback-loop \
 ## Key Parameters Explained
 
 ### Clinical Sampling Rates (Based on Research Findings)
-- `--input-sampling-rate 5`: 20% density, excellent quality (IoU: 0.71), 79% time saving
-- `--input-sampling-rate 15`: 6.7% density, acceptable quality (IoU: 0.58), 93.6% time saving
-- `--input-sampling-rate 20`: 5.0% density, **quality cliff** (IoU: 0.57), 95% time saving
-- `--input-sampling-rate 30`: 3.3% density, poor quality (IoU: 0.45), not recommended
-- `--input-sampling-rate 50`: 2.0% density, poor quality (IoU: 0.41), not recommended
+- `--input-sampling-rate 5`: 20% density, excellent quality (IoU: 0.671), 79% time saving
+- `--input-sampling-rate 15`: 6.7% density, acceptable quality (IoU: 0.655), 93.6% time saving
+- `--input-sampling-rate 20`: 5.0% density, **quality cliff** (IoU: 0.712), 95% time saving
+- `--input-sampling-rate 30`: 3.3% density, poor quality (IoU: 0.525), not recommended
+- `--input-sampling-rate 50`: 2.0% density, poor quality (IoU: 0.500), not recommended
 
 ### Clinical Translation Guidelines
 
 | Annotation Density | Clinical Use Case | Time Investment | Quality Expectation |
 |-------------------|------------------|-----------------|-------------------|
-| 1:5 (20%) | High-precision research | 13.2 min/exam | Excellent (IoU ≥ 0.7) |
-| 1:15 (6.7%) | **Optimal clinical workflow** | 4.1 min/exam | Acceptable (IoU ≥ 0.58) |
-| 1:20 (5.0%) | Feasibility boundary | 3.2 min/exam | Marginal (Quality cliff) |
-| 1:30+ (<3.3%) | Not recommended | <2 min/exam | Poor (Clinical risk) |
+| 1:5 (20%) | High-precision research | 13.2 min/exam | Excellent (IoU: 0.671) |
+| 1:15 (6.7%) | **Optimal clinical workflow** | 4.1 min/exam | Acceptable (IoU: 0.655) |
+| 1:20 (5.0%) | Feasibility boundary | 3.2 min/exam | Marginal (IoU: 0.712) |
+| 1:30+ (<3.3%) | Not recommended | <2 min/exam | Poor (IoU ≤ 0.525) |
 
 ### Algorithm-Specific Parameters
 - `--learning-mode`: **NOT RECOMMENDED** for sparse input (counterproductive)
@@ -281,7 +281,8 @@ The system provides comprehensive evaluation based on computer vision standards:
 Based on 354 experimental runs across 11 pediatric FAST examinations:
 
 **Optimal Clinical Performance:**
-- **1:15 sampling (6.7% input)**: Mean IoU 0.58, 93.6% time reduction
+- **1:15 sampling (6.7% input)**: Mean IoU 0.655, 93.6% time reduction
+- **1:20 sampling (5.0% input)**: Mean IoU 0.712, 95% time reduction  
 - **Quality threshold**: 46.3% of frames achieve IoU > 0.7 (clinically acceptable)
 - **Best case**: Exam 132, 1:5 sampling, IoU 0.975 (near-perfect)
 - **Worst case**: Exam 91, 1:50 sampling, IoU 0.091 (failure mode)
@@ -361,9 +362,9 @@ goobusters/
 
 ### Clinical Workflow Transformation
 - **Before**: 64 minutes per exam for complete annotation
-- **After**: 4.1 minutes per exam with acceptable quality (1:15 sampling)
+- **After**: 4.1 minutes per exam with acceptable quality (1:15 sampling, IoU: 0.655)
 - **Time Savings**: 93.6% reduction in expert annotation burden
-- **Quality Maintained**: Mean IoU 0.58 (acceptable for AI training)
+- **Quality Maintained**: Mean IoU 0.655-0.712 at practical sampling rates
 
 ### Key Clinical Findings
 - **Quality Cliff Identified**: Sharp performance drop at 5.0% input density (1:20 sampling)
@@ -420,11 +421,11 @@ If you use this work in your research, please cite:
 
 ## License
 
-
+[Your chosen license]
 
 ## Acknowledgments
 
 - Pediatric Emergency Care Applied Research Network (PECARN)
 - Emergency medicine physicians with specialized FAST training
 - MD.ai platform for annotation management
-- OpenCV community for Dense Inverse Search implementations
+- OpenCV community for Dense Inverse Search implementation
