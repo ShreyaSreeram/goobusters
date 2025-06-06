@@ -33,17 +33,17 @@ The system addresses these by:
 4. **Quality Validation**: IoU and Dice coefficient evaluation against expert ground truth
 
 ### Research Findings
-Based on 354 experimental runs across 11 pediatric FAST examinations:
+Based on 466 experimental runs across 14 pediatric FAST examinations:
 
-| Sampling Rate | Input Density | Mean IoU | Annotation Burden Reduction | Clinical Viability |
-|---------------|---------------|----------|---------------------------|-------------------|
-| 1:5 | 20% | 0.671 | 79% | Excellent |
-| 1:15 | 6.7% | 0.655 | 93.6% | Acceptable |
-| 1:20 | 5.0% | 0.712 | 95% | **Quality Cliff** |
-| 1:30 | 3.3% | 0.525 | 97% | Poor |
-| 1:50 | 2.0% | 0.500 | 98% | Poor |
+| Sampling Rate | Input Density | Mean IoU (Baseline) | Annotation Burden Reduction | Clinical Viability |
+|---------------|---------------|---------------------|---------------------------|-------------------|
+| 1:5 | 20% | 0.651 | 79% | Good |
+| 1:15 | 6.7% | 0.615 | 93.6% | Acceptable |
+| 1:20 | 5.0% | 0.611 | 95% | Acceptable |
+| 1:30 | 3.3% | 0.487 | 97% | Poor |
+| 1:50 | 2.0% | 0.466 | 98% | Poor |
 
-**Key Finding**: A critical "quality cliff" occurs at 5.0% input density (1:20 sampling), below which annotations become unsuitable for clinical use.
+**Key Finding**: Performance remains stable between 1:15 and 1:20 sampling, with a significant drop occurring at 1:30 sampling (3.3% input density).
 
 ## Features
 
@@ -55,10 +55,10 @@ Based on 354 experimental runs across 11 pediatric FAST examinations:
 - **PECARN Dataset Integration**: Validated on pediatric emergency care research network data
 
 ### Clinical Validation & Limitations
-- **Best Performance**: Simple fluid presentations (IoU: 0.61)
-- **Challenging Cases**: Multiple distinct fluid patterns (IoU: 0.44), disappear-reappear patterns (IoU: 0.45)
-- **Parameter Learning**: Counterproductive under extreme sparsity; fixed parameters preferred
-- **Temporal Issues**: Mask "jumping" artifacts in complex cases due to ultrasound speckle noise
+- **Best Performance**: Complex mixed presentations (IoU: 0.644), uncomplicated (IoU: 0.609), branching fluid (IoU: 0.611)
+- **Challenging Cases**: Multiple distinct fluid patterns (IoU: 0.440), disappear-reappear patterns (IoU: 0.449)
+- **Clinical Success Rate**: 40.0% of uncomplicated cases achieve IoU > 0.7, while multiple distinct patterns achieve 0.0%
+- **Parameter Learning**: Consistently counterproductive (5.2% overall performance decrease)
 
 ### Validation & Quality Control
 - **Ground Truth Creation**: Establish verified annotation datasets
@@ -183,20 +183,20 @@ python src/consolidated_tracking.py --feedback-loop \
 ## Key Parameters Explained
 
 ### Clinical Sampling Rates (Based on Research Findings)
-- `--input-sampling-rate 5`: 20% density, excellent quality (IoU: 0.671), 79% time saving
-- `--input-sampling-rate 15`: 6.7% density, acceptable quality (IoU: 0.655), 93.6% time saving
-- `--input-sampling-rate 20`: 5.0% density, **quality cliff** (IoU: 0.712), 95% time saving
-- `--input-sampling-rate 30`: 3.3% density, poor quality (IoU: 0.525), not recommended
-- `--input-sampling-rate 50`: 2.0% density, poor quality (IoU: 0.500), not recommended
+- `--input-sampling-rate 5`: 20% density, good quality (IoU: 0.651), 79% time saving
+- `--input-sampling-rate 15`: 6.7% density, acceptable quality (IoU: 0.615), 93.6% time saving
+- `--input-sampling-rate 20`: 5.0% density, acceptable quality (IoU: 0.611), 95% time saving
+- `--input-sampling-rate 30`: 3.3% density, poor quality (IoU: 0.487), not recommended
+- `--input-sampling-rate 50`: 2.0% density, poor quality (IoU: 0.466), not recommended
 
 ### Clinical Translation Guidelines
 
 | Annotation Density | Clinical Use Case | Time Investment | Quality Expectation |
 |-------------------|------------------|-----------------|-------------------|
-| 1:5 (20%) | High-precision research | 13.2 min/exam | Excellent (IoU: 0.671) |
-| 1:15 (6.7%) | **Optimal clinical workflow** | 4.1 min/exam | Acceptable (IoU: 0.655) |
-| 1:20 (5.0%) | Feasibility boundary | 3.2 min/exam | Marginal (IoU: 0.712) |
-| 1:30+ (<3.3%) | Not recommended | <2 min/exam | Poor (IoU ≤ 0.525) |
+| 1:5 (20%) | High-precision research | 13.2 min/exam | Good (IoU: 0.651) |
+| 1:15 (6.7%) | **Optimal clinical workflow** | 4.1 min/exam | Acceptable (IoU: 0.615) |
+| 1:20 (5.0%) | **Alternative workflow** | 3.2 min/exam | Acceptable (IoU: 0.611) |
+| 1:30+ (<3.3%) | Not recommended | <2 min/exam | Poor (IoU ≤ 0.487) |
 
 ### Algorithm-Specific Parameters
 - `--learning-mode`: **NOT RECOMMENDED** for sparse input (counterproductive)
@@ -278,21 +278,26 @@ The system provides comprehensive evaluation based on computer vision standards:
 5. **Parameter Logs**: Learning mode optimization history (when enabled)
 
 ### Research-Validated Results
-Based on 354 experimental runs across 11 pediatric FAST examinations:
+Based on 466 experimental runs across 14 pediatric FAST examinations:
 
 **Optimal Clinical Performance:**
-- **1:15 sampling (6.7% input)**: Mean IoU 0.655, 93.6% time reduction
-- **1:20 sampling (5.0% input)**: Mean IoU 0.712, 95% time reduction  
-- **Quality threshold**: 46.3% of frames achieve IoU > 0.7 (clinically acceptable)
+- **1:15 sampling (6.7% input)**: Mean IoU 0.615, 93.6% time reduction
+- **1:20 sampling (5.0% input)**: Mean IoU 0.611, 95% time reduction  
+- **Clinical success rate**: 40.0% of uncomplicated cases achieve IoU > 0.7
 - **Best case**: Exam 132, 1:5 sampling, IoU 0.975 (near-perfect)
-- **Worst case**: Exam 91, 1:50 sampling, IoU 0.091 (failure mode)
+- **Worst case**: Exam 97, 1:30 sampling, IoU 0.075 (failure mode)
 
 **Morphology-Specific Performance:**
-- **Uncomplicated fluid**: IoU 0.609 (excellent tracking)
-- **Branching patterns**: IoU 0.611 (excellent tracking)  
-- **Complex mixed**: IoU 0.644 (good tracking)
-- **Multiple distinct**: IoU 0.440 (challenging)
-- **Disappear-reappear**: IoU 0.449 (challenging)
+- **Complex mixed**: IoU 0.644 (30.0% clinical success rate)
+- **Branching patterns**: IoU 0.611 (28.8% clinical success rate)  
+- **Uncomplicated fluid**: IoU 0.609 (40.0% clinical success rate)
+- **Multiple distinct**: IoU 0.440 (0.0% clinical success rate)
+- **Disappear-reappear**: IoU 0.449 (0.0% clinical success rate)
+
+**Parameter Learning Analysis:**
+- **Overall impact**: 5.2% performance decrease across all conditions
+- **Statistical significance**: Significant degradation at sparse sampling rates (p<0.01 for 1:20, 1:30, 1:50)
+- **Clinical recommendation**: Use baseline mode; avoid learning mode
 
 ## Command Reference
 
@@ -362,15 +367,17 @@ goobusters/
 
 ### Clinical Workflow Transformation
 - **Before**: 64 minutes per exam for complete annotation
-- **After**: 4.1 minutes per exam with acceptable quality (1:15 sampling, IoU: 0.655)
+- **After**: 4.1 minutes per exam with acceptable quality (1:15 sampling, IoU: 0.615)
 - **Time Savings**: 93.6% reduction in expert annotation burden
-- **Quality Maintained**: Mean IoU 0.655-0.712 at practical sampling rates
+- **Quality Maintained**: Mean IoU 0.611-0.651 at practical sampling rates (1:15 to 1:5)
+- **Statistical Validation**: 466 experiments across 14 examinations, 1114 total iterations
 
 ### Key Clinical Findings
-- **Quality Cliff Identified**: Sharp performance drop at 5.0% input density (1:20 sampling)
-- **Morphology Dependency**: Algorithm performance varies significantly by fluid complexity
-- **Parameter Learning Limitations**: Counterproductive under sparse conditions
-- **Emergency Feasibility**: 1:15 sampling rate practical for clinical deployment
+- **Performance Plateau**: Stable performance between 1:15 (IoU: 0.615) and 1:20 (IoU: 0.611) sampling
+- **Quality Threshold**: Sharp performance drop at 1:30 sampling (IoU: 0.487)
+- **Morphology Dependency**: Algorithm performance varies dramatically by fluid complexity
+- **Parameter Learning Ineffectiveness**: Statistically significant performance degradation (5.2% overall)
+- **Clinical Success Rates**: Only uncomplicated cases achieve reliable IoU > 0.7 (40% success rate)
 
 ### AI Training Dataset Impact
 For pediatric FAST AI model development:
