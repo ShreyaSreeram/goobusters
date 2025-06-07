@@ -110,11 +110,11 @@ MULTI_FRAME_AVAILABLE = True
 TRACKING_MODE = 'multi'  
 DEBUG_MODE = False 
 
-# Load environment variables
+# Load environment variables from .env 
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 load_dotenv(dotenv_path)
 
-# Initialize label IDs
+# Initialise label IDs
 LABEL_IDS = {
     'FLUID_OF': os.getenv('LABEL_ID_FLUID_OF', 'L_JykNe7'),
     'FREE_FLUID': os.getenv('LABEL_ID_FREE_FLUID', 'L_13yPql'),
@@ -153,7 +153,7 @@ def is_fluid_annotation(annotation):
         return annotation.labelId == LABEL_ID_FREE_FLUID  
     return False
 
-# Print initial values
+# Print initial values --> sanity check 
 print(f"\nInitialized label IDs:")
 print(f"LABEL_ID_FLUID_OF: {LABEL_ID_FLUID_OF}")
 print(f"LABEL_ID_FREE_FLUID: {LABEL_ID_FREE_FLUID}")
@@ -174,7 +174,7 @@ def debug_print(message):
 debug_print(f"=== DEBUG LOG STARTED AT {time.ctime()} ===")
 
 
-# Enable debug mode
+# Enable debug mode --> only if specified 
 
 DEBUG_SAMPLE_SIZE = 5
 DEBUG_ISSUE_TYPES = ["multiple_distinct"]
@@ -190,7 +190,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PROJECT_DIR, "output")
 MULTI_FRAME_DIR = os.path.join(OUTPUT_DIR, "multi_frame_output") 
 
-FLOW_METHOD = ['dis']
+FLOW_METHOD = ['dis'] # Only tested dis in this project
 MASK_MIN_SIZE = 100   
 INTENSITY_THRESHOLD = 30
 
@@ -234,6 +234,7 @@ def setup_logging(output_dir):
     return log_file
 
 
+
 def polygons_to_mask(polygons, frame_height, frame_width):
     """Convert polygon points to a binary mask"""
     mask = np.zeros((frame_height, frame_width), dtype=np.uint8)
@@ -243,7 +244,7 @@ def polygons_to_mask(polygons, frame_height, frame_width):
             for point in polygon
         ]
         points = np.array(clipped_polygon, dtype=np.int32)
-        cv2.fillPoly(mask, [points], 1)
+        cv2.fillPoly(mask, [points], 1) # Using OpenCV'S fill function to convert to binary masks
     return mask
 
 def print_mask_stats(mask, frame_num):
@@ -265,26 +266,25 @@ def visualize_flow(frame, flow, skip=8):
     """
     h, w = frame.shape[:2]
     
-    # Create empty visualization image
+    # Create empty visualisation image
     vis = np.zeros((h * 2, w, 3), dtype=np.uint8)
     
     # Copy original frame to top half
-    if len(frame.shape) == 2:  # Convert grayscale to color if needed
+    if len(frame.shape) == 2:  # Convert grayscale to colour if needed
         vis[:h, :] = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     else:
         vis[:h, :] = frame.copy()
     
-    # Create flow visualization
     # Calculate flow magnitude and angle
     flow_x = flow[..., 0]
     flow_y = flow[..., 1]
     magnitude, angle = cv2.cartToPolar(flow_x, flow_y)
     
-    # Create HSV image for flow visualization
+    # Create HSV image for flow visualisation
     hsv = np.zeros((h, w, 3), dtype=np.uint8)
-    hsv[..., 0] = angle * 180 / np.pi / 2  # Hue: direction
-    hsv[..., 1] = 255                       # Saturation: max
-    hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)  # Value: magnitude
+    hsv[..., 0] = angle * 180 / np.pi / 2  
+    hsv[..., 1] = 255                       
+    hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)  
     
     # Convert HSV to BGR
     flow_vis = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
@@ -400,7 +400,7 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
         diff_mask[(binary_initial > 0) & (binary_flow == 0)] = 1  # Initial only - show in red
         diff_mask[(binary_initial == 0) & (binary_flow > 0)] = 2  # Flow only - show in blue
         
-        # Apply the difference visualization
+        # Apply the difference visualisation
         diff_viz[diff_mask == 1] = diff_viz[diff_mask == 1] * 0.7 + np.array([0, 0, 255], dtype=np.uint8) * 0.3  # Red
         diff_viz[diff_mask == 2] = diff_viz[diff_mask == 2] * 0.7 + np.array([255, 0, 0], dtype=np.uint8) * 0.3  # Blue
         
@@ -463,7 +463,7 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
     cv2.putText(grid, "Final Mask", (w*2 + 10, h + 30), 
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     
-    # Add flow visualization (Bottom row) if flow is provided
+    # Add flow visualisation (Bottom row) if flow is provided
     if flow is not None:
         try:
             # Flow Vectors (Bottom Left)
@@ -482,7 +482,7 @@ def debug_visualize(frame, initial_mask, flow_mask, adjusted_mask, final_mask, f
                 cv2.putText(grid, "Flow Heatmap", (w + 10, h*2 + 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             else:
-                # If visualization format is different, just use what we have
+                # If visualisation format is different, just use what we have
                 grid[h*2:h*3, :w] = flow_vis
                 cv2.putText(grid, "Flow Visualization", (10, h*2 + 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
@@ -535,7 +535,7 @@ def create_difference_map(frame1, frame2, flow=None):
         flow: Optional flow field between the frames (numpy array)
         
     Returns:
-        Visualization showing frame differences and enhanced flow vectors
+        Visualisation showing frame differences and enhanced flow vectors
     """
     # Convert frames to grayscale if they're not already
     if len(frame1.shape) == 3:
@@ -551,7 +551,7 @@ def create_difference_map(frame1, frame2, flow=None):
     # Enhance difference for better visibility
     diff_enhanced = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
     
-    # Apply color map for better visualization
+    # Apply colour map for better visualization
     diff_color = cv2.applyColorMap(diff_enhanced, cv2.COLORMAP_JET)
     
     # If flow is provided, overlay flow vectors on areas with significant differences
@@ -576,7 +576,7 @@ def create_difference_map(frame1, frame2, flow=None):
             for x in range(0, w, skip):
                 if diff_mask[y, x] and flow_mag_norm[y, x] > 0.05:  # Lower threshold to show more arrows
                     # Amplify the vectors significantly
-                    fx = flow[y, x, 0] * 3.0  # Much larger scale factor
+                    fx = flow[y, x, 0] * 3.0  
                     fy = flow[y, x, 1] * 3.0
                     
                     # First draw a black outline/shadow
@@ -602,7 +602,7 @@ def create_difference_map(frame1, frame2, flow=None):
         
         diff_color = diff_color_darkened
     
-    # Create a combined visualization
+    # Create a combined visualisation
     result = np.zeros((frame1.shape[0] * 2, frame1.shape[1], 3), dtype=np.uint8)
     
     # Add original frames
@@ -719,7 +719,7 @@ def calculate_tracking_metrics(algorithm_masks, ground_truth_masks):
                         # Try to extract shape from polygon data
                         try:
                             if 'data' in gt_mask and 'foreground' in gt_mask['data']:
-                                # Default shape - you might need to adjust this
+                                # Default shape - adjustable 
                                 gt_shape = (480, 640)  # Common ultrasound dimensions
                             else:
                                 gt_shape = (480, 640)
@@ -738,8 +738,7 @@ def calculate_tracking_metrics(algorithm_masks, ground_truth_masks):
                 try:
                     foreground_data = gt_mask['data']['foreground']
                     if foreground_data and len(foreground_data) > 0:
-                        # You'll need to implement polygon to mask conversion here
-                        # For now, let's skip this frame
+                        
                         print(f"Frame {frame_idx}: Skipping polygon-format ground truth")
                         continue
                     else:
@@ -997,7 +996,7 @@ def upload_masks_to_mdai(client, masks_data, project_id, dataset_id=None):
         dataset_id: MD.ai dataset ID (optional)
     """
     if dataset_id is None:
-        dataset_id = DATASET_ID  # Use the global dataset ID if not provided
+        dataset_id = DATASET_ID  
         
     try:
         print("\nPreparing annotations for MD.ai upload...")
@@ -1005,7 +1004,7 @@ def upload_masks_to_mdai(client, masks_data, project_id, dataset_id=None):
         # Format annotations according to MD.ai schema
         annotations = []
         
-        # Track which study/series pairs we need to clean up
+        
         cleanup_pairs = set()
         
         for mask_info in masks_data:
@@ -1052,7 +1051,7 @@ def upload_masks_to_mdai(client, masks_data, project_id, dataset_id=None):
                 successful_count = len(annotations) - len(failed_annotations)
                 print(f"Successfully uploaded {successful_count} out of {len(annotations)} annotations")
                 
-                # Return empty list as a placeholder for successful annotations
+                
                 # (MD.ai's import_annotations doesn't return the successful IDs)
                 return [{'success': True} for _ in range(successful_count)]
             else:
@@ -1211,58 +1210,6 @@ def visualize_flow(frame, flow, skip=8):
     
     return vis
 
-def diagnose_video_processing(video_path, output_video_path):
-    """
-    Diagnoses video processing by comparing input and output video properties.
-    """
-    print("\nDiagnosing video processing:")
-    
-    # Check input video
-    in_cap = cv2.VideoCapture(video_path)
-    in_frames = int(in_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    in_fps = in_cap.get(cv2.CAP_PROP_FPS)
-    in_width = int(in_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    in_height = int(in_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    in_duration = in_frames / in_fps if in_fps > 0 else 0
-    
-    print(f"\nInput Video Properties:")
-    print(f"Path: {video_path}")
-    print(f"Frame Count: {in_frames}")
-    print(f"FPS: {in_fps}")
-    print(f"Resolution: {in_width}x{in_height}")
-    print(f"Duration: {in_duration:.2f} seconds")
-    
-    # Check if output video exists
-    if os.path.exists(output_video_path):
-        out_cap = cv2.VideoCapture(output_video_path)
-        out_frames = int(out_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        out_fps = out_cap.get(cv2.CAP_PROP_FPS)
-        out_duration = out_frames / out_fps if out_fps > 0 else 0
-        
-        print(f"\nOutput Video Properties:")
-        print(f"Path: {output_video_path}")
-        print(f"Frame Count: {out_frames}")
-        print(f"FPS: {out_fps}")
-        print(f"Duration: {out_duration:.2f} seconds")
-        
-        # Check for frame loss
-        if out_frames < in_frames:
-            print(f"\nWARNING: Frame loss detected!")
-            print(f"Missing {in_frames - out_frames} frames")
-        
-        out_cap.release()
-    else:
-        print(f"\nWARNING: Output video not found at {output_video_path}")
-    
-    in_cap.release()
-    return {
-        'input_frames': in_frames,
-        'input_fps': in_fps,
-        'input_duration': in_duration,
-        'output_frames': out_frames if 'out_frames' in locals() else 0,
-        'output_fps': out_fps if 'out_fps' in locals() else 0,
-        'output_duration': out_duration if 'out_duration' in locals() else 0
-    }
 
 
 def save_combined_video(video_path, output_video_path, initial_mask, frame_number, debug_dir, flow_processor, 
@@ -1445,7 +1392,7 @@ def save_combined_video(video_path, output_video_path, initial_mask, frame_numbe
         out.release()
         print(f"\nFrames written to video: {frames_written}")
         
-        # NEW TRACKING VALIDATION CODE - MOVED HERE BEFORE MD.AI UPLOAD
+        # NEW TRACKING VALIDATION CODE 
         print("\n==== STARTING TRACKING VALIDATION ====")
         print(f"Debug directory: {debug_dir}")
         print(f"Output video path: {output_video_path}")
@@ -2336,7 +2283,7 @@ def preprocess_ground_truth_for_tracker(ground_truth_annotations, video_path, st
 
 def extract_algorithm_masks_for_evaluation(algorithm_masks, ground_truth_masks):
     """
-    Advanced function to extract algorithm masks and align them properly with ground truth,
+    Function to extract algorithm masks and align them properly with ground truth,
     handling MD.ai 1-indexed frames correctly.
     
     Args:
@@ -2534,7 +2481,7 @@ def extract_algorithm_masks_only(algorithm_masks, ground_truth_indices=None):
             if len(original_frames) < 20 or np.sum(mask) > 0:
                 print(f"✓ Algorithm frame {frame_idx} → mask sum: {np.sum(mask)} ({mask_type})")
     
-    # Try several offset strategies to maximize ground truth coverage
+   
     # First, try the standard +1 offset from MD.ai
     mdai_frames = []
     for frame_idx in original_frames:
@@ -2698,7 +2645,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                                  sampling_rate=10,              
                                  input_sampling_rate=None,      
                                  evaluation_sampling_rate=None,
-                                 include_method_comparison=False): # NEW: Method comparison parameter
+                                 include_method_comparison=False): 
     """
     Evaluates the algorithm against expert-refined ground truth annotations
     with support for iterative learning and feedback loop, and optional method comparison
@@ -2743,7 +2690,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
     print(f"algorithm_label_id: {algorithm_label_id}")
     print(f"label_id_no_fluid: {label_id_no_fluid}")
     print(f"label_id_machine: {label_id_machine}")
-    print(f"include_method_comparison: {include_method_comparison}")  # NEW
+    print(f"include_method_comparison: {include_method_comparison}")  
     print("="*60 + "\n")
     
     evaluation_results = {}
@@ -2840,7 +2787,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                             'is_no_fluid': True,
                             'type': 'no_fluid'
                         }
-                        no_fluid_ground_truth_frames.add(frame_num)  # Track this frame
+                        no_fluid_ground_truth_frames.add(frame_num)  
                     else:
                         # Try to get polygons from different possible fields
                         polygons = None
@@ -3098,7 +3045,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                         if is_clear or is_no_fluid:
                             # Create no-fluid annotation
                             annotation = {
-                                'labelId': label_id_no_fluid,  # Use no-fluid label
+                                'labelId': label_id_no_fluid,  
                                 'StudyInstanceUID': study_uid,
                                 'SeriesInstanceUID': series_uid,
                                 'frameNumber': int(frame_idx),
@@ -3252,9 +3199,9 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
             
             print(f"Extracted {len(algorithm_masks_clean)} PREDICTED masks for evaluation")
             print(f"Excluded {len(annotation_frames)} memorized frames from evaluation")
-            ground_truth_masks_clean = ground_truth_masks  # Keep ground truth as is
+            ground_truth_masks_clean = ground_truth_masks  
             
-            # Find common frames for evaluation (excluding memorized frames)
+            # Find common frames for evaluation (excluding memorised frames)
             common_frames = set(algorithm_masks_clean.keys()) & set(ground_truth_masks_clean.keys())
             print(f"Common frames for GENUINE evaluation: {len(common_frames)}")
             
@@ -3286,7 +3233,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 
                 # Get frame indices and apply sampling (ONLY ON PREDICTED FRAMES)
                 gt_frames = sorted(list(ground_truth_masks_clean.keys()))
-                algo_frames = sorted(list(algorithm_masks_clean.keys()))  # These are now prediction-only
+                algo_frames = sorted(list(algorithm_masks_clean.keys()))  
                 common_frames_for_sampling = sorted(list(set(gt_frames) & set(algo_frames)))
                 
                 print(f"Ground truth masks available: {len(ground_truth_masks_clean)}")
@@ -3620,7 +3567,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                     f.write(f"- Mean Dice: {metrics.get('mean_dice', 0.0):.4f}\n")
                     f.write(f"- % Frames IoU > 0.7: {metrics.get('iou_over_0.7', 0.0)*100:.1f}%\n\n")
                     
-                    # NEW: Add method comparison section
+                 
                     if include_method_comparison and comparison_metrics:
                         f.write("## Method Comparison\n\n")
                         if 'error' in comparison_metrics:
@@ -3631,7 +3578,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                             f.write(f"- Method agreement IoU: {comparison_metrics.get('mean_iou', 0.0):.4f}\n")
                             f.write(f"- Method agreement Dice: {comparison_metrics.get('mean_dice', 0.0):.4f}\n")
                             
-                            # Add performance comparison if available
+                            # Add performance comparison
                             if 'performance_improvement' in comparison_metrics:
                                 perf = comparison_metrics['performance_improvement']
                                 f.write(f"\n### Performance Against Ground Truth\n\n")
@@ -3692,7 +3639,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                                     if 'metrics' in v], key=lambda x: x[1])[0]
             }
             
-            # NEW: Add method comparison summary if enabled
+            # Add method comparison summary if enabled
             if include_method_comparison:
                 comparison_results = [r.get('method_comparison', {}) for r in valid_results 
                                     if 'method_comparison' in r and 'error' not in r.get('method_comparison', {})]
@@ -3742,7 +3689,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
                 f.write(f"- Best Performing Video: {summary.get('best_video', 'N/A')}\n")
                 f.write(f"- Worst Performing Video: {summary.get('worst_video', 'N/A')}\n\n")
                 
-                # NEW: Add method comparison summary section
+                # Add method comparison summary section
                 if include_method_comparison and 'method_comparison_summary' in summary:
                     mc_summary = summary['method_comparison_summary']
                     f.write("## Method Comparison Summary\n\n")
@@ -3812,7 +3759,7 @@ def evaluate_with_expert_feedback(video_paths, study_series_pairs, flow_processo
     # Save results to file
     try:
         with open(os.path.join(output_dir, 'evaluation_results.json'), 'w') as f:
-            # Convert numpy values to Python native types for JSON serialization
+            
             json_results = convert_numpy_to_python(evaluation_results)
             json.dump(json_results, f, indent=2)
     except Exception as e:
@@ -3852,7 +3799,7 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
     print("="*80 + "\n")
     
     # Check for global no-fluid labels
-    global_no_fluid_label = "L_7BGg21"  # The label ID for global no-fluid exams
+    global_no_fluid_label = "L_7BGg21"  
     no_fluid_exams = set()
     
     if annotations_json:
@@ -3960,7 +3907,7 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
         
         target_videos = filtered_videos
     
-    # Initialize shared parameters
+    # Initialise shared parameters
     shared_params = None
     if learning_mode:
         try:
@@ -3972,7 +3919,7 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
             print("Falling back to standard tracking without learning")
             learning_mode = False
     
-    # Initialize optical flow processor 
+    # Initialise optical flow processor 
     flow_processor = OpticalFlowProcessor(method=FLOW_METHOD[0])
     
     # Extract video paths and study/series pairs
@@ -4019,9 +3966,9 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
             print("The ground truth annotations have been uploaded with label ID:", label_id_ground_truth)
             
             if num_iterations > 1 and iteration == 0:
-                # MODIFIED: Don't wait for user input
+                
                 print("Proceeding automatically to evaluation phase...")
-                # Small delay to give user time to see the message
+               
                 time.sleep(3) 
         else:
             print(f"\nStep 1: Skipping ground truth creation for iteration {iteration+1}")
@@ -4030,7 +3977,7 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
         
         # Step 3: Run enhanced evaluation with feedback loop processing
         print("\nStep 3: Evaluating algorithm with feedback loop...")
-        # Pass shared_params to evaluation
+        
         try:
             eval_results = evaluate_with_expert_feedback(
                 video_paths, study_series_pairs, flow_processor,
@@ -4095,198 +4042,6 @@ def run_ground_truth_feedback_loop(target_videos, num_iterations=3, matched_anno
     
     return results
 
-def run_adaptive_sampling_feedback_loop(target_videos, sampling_rates=[5, 10, 15, 20, 25], 
-                                      num_iterations_per_rate=1, matched_annotations=None, 
-                                      free_fluid_annotations=None, annotations_json=None, 
-                                      mdai_client=None, project_id=None, dataset_id=None,
-                                      label_id_ground_truth=None, label_id_fluid=None,
-                                      label_id_no_fluid=None, label_id_machine=None,
-                                      flow_processor=None, exam_id=None):
-    """
-    Run adaptive sampling feedback loop that varies sampling rates across iterations
-    to test parameter learning capabilities.
-    
-    Args:
-        target_videos: List of (video_path, study_uid, series_uid) tuples
-        sampling_rates: List of sampling rates to test in sequence
-        num_iterations_per_rate: How many iterations to run per sampling rate
-        ... (other args same as regular feedback loop)
-    
-    Returns:
-        Dictionary with detailed results showing parameter evolution
-    """
-    print("\n" + "="*80)
-    print("=== ADAPTIVE SAMPLING FEEDBACK LOOP ===")
-    print(f"Testing sampling rates: {sampling_rates}")
-    print(f"Iterations per rate: {num_iterations_per_rate}")
-    print(f"Exam ID: {exam_id}")
-    print("="*80 + "\n")
-    
-    # Create output directory
-    base_output_dir = os.path.join(OUTPUT_DIR, f"adaptive_sampling_loop_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    if exam_id:
-        base_output_dir = os.path.join(OUTPUT_DIR, f"adaptive_sampling_exam_{exam_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    os.makedirs(base_output_dir, exist_ok=True)
-    
-    # Initialize shared parameters for learning across all rates
-    from src.multi_frame_tracking.multi_frame_tracker import SharedParams
-    shared_params = SharedParams()
-    
-    # Initialize flow processor
-    if flow_processor is None:
-        flow_processor = OpticalFlowProcessor(method=FLOW_METHOD[0])
-    
-    # Extract video paths and study/series pairs
-    video_paths = [v[0] for v in target_videos]
-    study_series_pairs = [(v[1], v[2]) for v in target_videos]
-    
-    results = {
-        'sampling_rates': sampling_rates,
-        'iterations_per_rate': num_iterations_per_rate,
-        'exam_id': exam_id,
-        'parameter_evolution': [],
-        'performance_evolution': [],
-        'rate_results': {}
-    }
-    
-    iteration_counter = 0
-    
-    # Test each sampling rate in sequence
-    for rate_idx, sampling_rate in enumerate(sampling_rates):
-        print(f"\n{'='*60}")
-        print(f"TESTING SAMPLING RATE: {sampling_rate} (every {sampling_rate}th frame)")
-        print(f"Rate {rate_idx + 1}/{len(sampling_rates)}")
-        print(f"{'='*60}")
-        
-        rate_results = {
-            'sampling_rate': sampling_rate,
-            'iterations': [],
-            'initial_params': shared_params.tracking_params.copy(),
-            'final_params': None,
-            'performance_change': None
-        }
-        
-        # Run multiple iterations at this sampling rate
-        for iter_in_rate in range(num_iterations_per_rate):
-            iteration_counter += 1
-            
-            print(f"\n--- Iteration {iteration_counter} (Rate {sampling_rate}, Sub-iteration {iter_in_rate + 1}) ---")
-            
-            # Create iteration output directory
-            iter_output_dir = os.path.join(base_output_dir, f"iteration_{iteration_counter}_rate_{sampling_rate}")
-            os.makedirs(iter_output_dir, exist_ok=True)
-            
-            # Log current parameters
-            print(f"Current parameters:")
-            print(f"  Window size: {shared_params.tracking_params['window_size']}")
-            print(f"  Flow quality threshold: {shared_params.tracking_params['flow_quality_threshold']:.3f}")
-            print(f"  Flow noise threshold: {shared_params.tracking_params['flow_noise_threshold']:.3f}")
-            print(f"  Mask threshold: {shared_params.tracking_params['mask_threshold']:.3f}")
-            
-            # Run evaluation with current sampling rate and parameters
-            try:
-                eval_results = evaluate_with_expert_feedback(
-                    video_paths, study_series_pairs, flow_processor,
-                    os.path.join(iter_output_dir, "evaluation"),
-                    mdai_client, project_id, dataset_id, 
-                    label_id_ground_truth,
-                    label_id_fluid,
-                    label_id_no_fluid,
-                    label_id_machine,
-                    annotations_json,
-                    args=None,
-                    shared_params=shared_params,
-                    learning_mode=True,  # Always enable learning
-                    iteration_number=iteration_counter,
-                    use_genuine_evaluation=False,
-                    sampling_rate=sampling_rate,  # Legacy parameter
-                    input_sampling_rate=sampling_rate,  # Key parameter
-                    evaluation_sampling_rate=1  # Always evaluate all frames
-                )
-                
-                # Extract performance metrics
-                if 'summary' in eval_results:
-                    current_iou = eval_results['summary']['overall_mean_iou']
-                    current_dice = eval_results['summary']['overall_mean_dice']
-                    print(f"Performance: IoU = {current_iou:.4f}, Dice = {current_dice:.4f}")
-                    
-                    # Store iteration results
-                    iteration_result = {
-                        'iteration': iteration_counter,
-                        'sampling_rate': sampling_rate,
-                        'sub_iteration': iter_in_rate + 1,
-                        'iou': current_iou,
-                        'dice': current_dice,
-                        'params_before': shared_params.tracking_params.copy(),
-                        'params_version_before': shared_params.version
-                    }
-                    
-                    # Update parameters based on performance
-                    print(f"Updating parameters based on IoU = {current_iou:.4f}...")
-                    improved = shared_params.update_from_feedback(eval_results['summary'])
-                    
-                    iteration_result.update({
-                        'params_after': shared_params.tracking_params.copy(),
-                        'params_version_after': shared_params.version,
-                        'params_improved': improved
-                    })
-                    
-                    # Log parameter changes
-                    if improved:
-                        print(f"✓ Parameters improved! New version: {shared_params.version}")
-                        print(f"  New window size: {shared_params.tracking_params['window_size']}")
-                        print(f"  New flow quality threshold: {shared_params.tracking_params['flow_quality_threshold']:.3f}")
-                    else:
-                        print(f"→ Parameters adjusted (version {shared_params.version})")
-                    
-                    # Save parameters for this iteration
-                    params_path = os.path.join(iter_output_dir, f"tracking_params_v{shared_params.version}.json")
-                    shared_params.save_to_file(params_path)
-                    
-                    rate_results['iterations'].append(iteration_result)
-                    results['parameter_evolution'].append(iteration_result)
-                    results['performance_evolution'].append({
-                        'iteration': iteration_counter,
-                        'sampling_rate': sampling_rate,
-                        'iou': current_iou,
-                        'dice': current_dice
-                    })
-                    
-                else:
-                    print("❌ No summary results from evaluation")
-                    
-            except Exception as e:
-                print(f"❌ Error in iteration {iteration_counter}: {str(e)}")
-                traceback.print_exc()
-                continue
-        
-        # Store final parameters for this rate
-        rate_results['final_params'] = shared_params.tracking_params.copy()
-        
-        # Calculate performance change within this rate
-        if len(rate_results['iterations']) > 1:
-            first_iou = rate_results['iterations'][0]['iou']
-            last_iou = rate_results['iterations'][-1]['iou']
-            rate_results['performance_change'] = last_iou - first_iou
-            print(f"\nRate {sampling_rate} summary:")
-            print(f"  Performance change: {first_iou:.4f} → {last_iou:.4f} (Δ = {rate_results['performance_change']:+.4f})")
-        
-        results['rate_results'][sampling_rate] = rate_results
-        
-        print(f"\nCompleted sampling rate {sampling_rate}")
-    
-    # Generate comprehensive report
-    create_adaptive_sampling_report(results, base_output_dir)
-    
-    # Save final results
-    final_results_path = os.path.join(base_output_dir, "adaptive_sampling_results.json")
-    with open(final_results_path, 'w') as f:
-        json.dump(convert_numpy_to_python(results), f, indent=2)
-    
-    print(f"\n✅ Adaptive sampling feedback loop completed!")
-    print(f"Results saved to: {base_output_dir}")
-    
-    return results
 
 def create_adaptive_sampling_report(results, output_dir):
     """Create a detailed report of the adaptive sampling experiment"""
@@ -4364,13 +4119,13 @@ def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description='Ultrasound free fluid tracking using optical flow')
     
-    # Separate input and evaluation sampling rates
+    #input and evaluation sampling rates
     parser.add_argument('--input-sampling-rate', type=int, default=10, 
                        help='Sampling rate for tracker INPUT (every Nth frame given to tracker)')
     parser.add_argument('--eval-sampling-rate', type=int, default=1, 
                        help='Sampling rate for evaluation (every Nth frame evaluated, 1=all frames)')
     
-    # Keep the old argument for backward compatibility
+    
     parser.add_argument('--sampling-rate', type=int, default=10, 
                        help='Legacy: applies to both input and evaluation')
     
@@ -4471,7 +4226,7 @@ if __name__ == "__main__":
         if args.debug:
             DEBUG_MODE = True
 
-        # Initialize logging
+      
         log_file = setup_logging(OUTPUT_DIR)
         print(f"All console output will be saved to: {log_file}")
         
@@ -4497,7 +4252,7 @@ if __name__ == "__main__":
         if None in [LABEL_ID_MACHINE_GROUP, LABEL_ID_FLUID_OF]:
             raise ValueError("Machine label IDs not properly set in .env file")
         
-        # Initialize MD.ai client (minimal - just for API calls, don't load project yet)
+        
         try:
             domain_value = os.getenv('DOMAIN')
             if not domain_value:
@@ -4516,7 +4271,6 @@ if __name__ == "__main__":
             print(f"Error connecting to MD.ai: {str(e)}")
             sys.exit(1)
 
-        # Don't load the project object yet - we'll do this after verifying our local files
         print("Skipping project object creation to avoid corrupted file issues")
 
         # Get project
@@ -4525,7 +4279,7 @@ if __name__ == "__main__":
            dataset_id=DATASET_ID,
            path=DATA_DIR) 
 
-        # DEBUG: Let's see exactly what files exist
+        # DEBUG: 
         print("\n=== FILE SYSTEM DEBUG ===")
         print(f"DATA_DIR: {DATA_DIR}")
         print(f"Checking directory: {os.path.abspath(DATA_DIR)}")
@@ -4533,10 +4287,10 @@ if __name__ == "__main__":
         
         # Force a fresh directory read
         import time
-        time.sleep(0.1)  # Small delay to ensure file system is fresh
+        time.sleep(0.1)  
         
         if os.path.exists(DATA_DIR):
-            # Get fresh file list with full paths for verification
+          
             all_files = []
             for item in os.listdir(DATA_DIR):
                 item_path = os.path.join(DATA_DIR, item)
@@ -4545,7 +4299,7 @@ if __name__ == "__main__":
             
             print(f"Total files in directory: {len(all_files)}")
             
-            # Show all annotation files with their sizes
+           
             annotation_files = [f for f in all_files if 'annotations' in f and f.endswith('.json')]
             print(f"\nAnnotation files found ({len(annotation_files)}):")
             for f in sorted(annotation_files):
@@ -4564,8 +4318,7 @@ if __name__ == "__main__":
                 print(f"  - {f} ({file_size:,} bytes)")
         print("=" * 50)
         
-        # Use your manually downloaded annotations file
-        # First priority: The most recent file (2025-05-13-202256.json)
+       
         recent_file = "mdai_ucsf_project_x9N2LJBZ_annotations_dataset_D_V688LQ_2025-05-13-202256.json"
         ANNOTATIONS = os.path.join(DATA_DIR, recent_file)
         
@@ -4592,7 +4345,7 @@ if __name__ == "__main__":
             print(f"✗ Most recent file not found")
             ANNOTATIONS = None
         
-        # If the most recent file doesn't work, try alternatives
+    
         if ANNOTATIONS is None:
             print("\nTrying alternative files...")
             
@@ -4615,7 +4368,7 @@ if __name__ == "__main__":
                 except Exception as e:
                     print(f"✗ Error with labelgroup file: {e}")
             
-            # If still no luck, try the most recent working file
+           # most recent working file
             if ANNOTATIONS is None:
                 dataset_files = [f for f in available_files 
                                if f.startswith('mdai_ucsf_project_x9N2LJBZ_annotations_dataset_D_V688LQ_') 
@@ -4626,7 +4379,7 @@ if __name__ == "__main__":
                     dataset_files.sort(key=lambda f: os.path.getmtime(os.path.join(DATA_DIR, f)), reverse=True)
                     
                     for filename in dataset_files:
-                        if filename == recent_file:  # Skip the one we already tried
+                        if filename == recent_file:  
                             continue
                         test_path = os.path.join(DATA_DIR, filename)
                         print(f"Trying {filename}...")
@@ -4683,8 +4436,7 @@ if __name__ == "__main__":
         print(f"Looking for free fluid label: {LABEL_ID_FREE_FLUID}")
         print("=" * 40)
         
-        # Now create a dummy project object that only handles the BASE path
-        # We'll create a simple class that mimics the project interface we need
+        
         class SimpleProject:
             def __init__(self, data_dir, dataset_id):
                 self.data_dir = data_dir
@@ -4738,7 +4490,7 @@ if __name__ == "__main__":
             print("ERROR: Images directory not found at expected path")
             sys.exit(1)
 
-# Skip all the zip extraction logic since you already have the extracted directory
+
         print("Skipping zip extraction since images are already extracted")   
         
         # Process free fluid annotations
@@ -4749,7 +4501,7 @@ if __name__ == "__main__":
             (annotations_df['frameNumber'].notna())
         ].copy()
         
-        # IMPORTANT: Also get ground truth annotations separately
+   
         ground_truth_annotations = annotations_df[
             (annotations_df['labelId'] == LABEL_ID_GROUND_TRUTH) &
             (annotations_df['frameNumber'].notna())
@@ -4758,12 +4510,11 @@ if __name__ == "__main__":
         print(f"Found {len(ground_truth_annotations)} ground truth annotations")
         print(f"Found {len(free_fluid_annotations)} free fluid annotations in main file")
         
-        # If we don't have free fluid annotations, we need to get them from a different file
+     
         if len(free_fluid_annotations) == 0 and len(ground_truth_annotations) > 0:
             print("\nNo free fluid annotations found in ground truth file.")
             print("Looking for original annotations file with free fluid data...")
-            
-            # Look for a non-labelgroup file that might have the original annotations
+         
             available_files = os.listdir(DATA_DIR)
             original_files = [f for f in available_files 
                             if f.startswith('mdai_ucsf_project_x9N2LJBZ_annotations_dataset_D_V688LQ_') 
@@ -4833,7 +4584,7 @@ if __name__ == "__main__":
         
         print(f"Total Free Fluid Annotations: {len(free_fluid_annotations)}")
         
-        # FIXED MATCHING LOGIC FOR FEEDBACK LOOP
+       
         if args.feedback_loop and (args.ground_truth_single_exam or args.exam_id):
             # Use exam_id if provided, otherwise use ground_truth_single_exam
             exam_id_to_use = args.exam_id if args.exam_id else args.ground_truth_single_exam
@@ -4854,7 +4605,7 @@ if __name__ == "__main__":
                 print(f"Test path exists: {os.path.exists(test_video_path)}")
     
             # Find all videos with ground truth annotations for this exam
-            # Use the same pattern as your working workflow
+           
             for _, row in ground_truth_annotations.iterrows():
                 try:
                     # Check if this annotation belongs to the target exam
@@ -4863,7 +4614,7 @@ if __name__ == "__main__":
                         study_uid = row['StudyInstanceUID']
                         series_uid = row['SeriesInstanceUID']
                 
-                        # Use the same video path construction as your working workflow
+                        
                         video_path = os.path.join(BASE, study_uid, f"{series_uid}.mp4")
                 
                         print(f"Checking video for Exam #{exam_number}:")
@@ -4873,7 +4624,7 @@ if __name__ == "__main__":
                         print(f"  Exists: {os.path.exists(video_path)}")
                 
                         if os.path.exists(video_path):
-                            # Add this video to our target list
+                            
                             video_info = (video_path, study_uid, series_uid)
                             if video_info not in target_videos:
                                 target_videos.append(video_info)
@@ -4913,7 +4664,7 @@ if __name__ == "__main__":
                 print("2. No ground truth annotations were created for this exam")
                 print("3. The video files are missing")
                 
-                # Debug: show some exam numbers that do exist
+             
                 print("\nDebugging: Available exam numbers in ground truth annotations:")
                 available_exams = set()
                 for _, row in ground_truth_annotations.head(20).iterrows():
@@ -4925,16 +4676,15 @@ if __name__ == "__main__":
                 print(f"Sample exam numbers found: {sorted(list(available_exams))}")
                 sys.exit(1)
             
-            # For feedback loop, we don't need matched_annotations
-            # We'll work directly with the videos found
-            matched_annotations = pd.DataFrame()  # Empty, not needed for feedback loop
+            
+            matched_annotations = pd.DataFrame()  
             
             # Also prepare the ground truth annotations for these specific videos
             feedback_ground_truth = ground_truth_annotations[
                 ground_truth_annotations['StudyInstanceUID'].isin([v[1] for v in target_videos])
             ].copy()
             
-            # Add video paths using the same logic as working workflow
+            # Add video paths 
             feedback_ground_truth['video_path'] = feedback_ground_truth.apply(
                 lambda row: os.path.join(BASE, row['StudyInstanceUID'], f"{row['SeriesInstanceUID']}.mp4"),
                 axis=1
@@ -4964,7 +4714,7 @@ if __name__ == "__main__":
                 issue_annotations = annotations_df[annotations_df['labelId'] == label_id].copy()
                 print(f"Total {issue_type} Annotations: {len(issue_annotations)}")
             
-                # Merge without using 'frameNumber' as a key
+               
                 merged_annotations = pd.merge(
                     issue_annotations,
                     free_fluid_annotations[['StudyInstanceUID', 'SeriesInstanceUID', 'frameNumber', 'video_path', 'free_fluid_foreground']],
@@ -4988,7 +4738,7 @@ if __name__ == "__main__":
             
             print(f"Total matched annotations: {len(matched_annotations)}")
             
-            # For non-feedback loop, we don't have target_videos yet
+            
             target_videos = []
         
         # Check for multi-frame tracking availability
@@ -5071,11 +4821,11 @@ if __name__ == "__main__":
             print("Error: LABEL_ID_GROUND_TRUTH not defined in .env file")
             sys.exit(1)
 
-    # Initialize MD.ai client
+    # Initialise MD.ai client
     try:
         domain_value = os.getenv('DOMAIN')
         if not domain_value:
-            domain_value = "ucsf.md.ai"  # Hardcode as fallback
+            domain_value = "ucsf.md.ai"  
             print(f"WARNING: Using hardcoded domain {domain_value}")
         
         access_token_value = os.getenv('MDAI_TOKEN')
@@ -5126,7 +4876,7 @@ if __name__ == "__main__":
                     BASE = os.path.join(DATA_DIR, f"mdai_ucsf_project_{PROJECT_ID}_images_dataset_{DATASET_ID}")
                     print(f"Using fallback BASE path: {BASE}")
 
-        # Verify BASE exists
+        
         if not os.path.exists(BASE):
             print(f"ERROR: No valid BASE directory found")
             print(f"Checked {BASE} but it doesn't exist")
@@ -5172,7 +4922,7 @@ if __name__ == "__main__":
             LABEL_ID_MACHINE_GROUP = os.getenv('LABEL_ID_MACHINE_GROUP', 'G_7n3P09')
             print(f"Using fallback LABEL_ID_MACHINE_GROUP: {LABEL_ID_MACHINE_GROUP}")
         
-        # Try to identify annotations file(s)
+      
         print("Looking for annotation files in DATA_DIR:")
         annotation_files = [f for f in os.listdir(DATA_DIR) if f.startswith('mdai_ucsf_project') and f.endswith('.json')]
         print(f"Found {len(annotation_files)} annotation files")
@@ -5193,7 +4943,7 @@ if __name__ == "__main__":
                         annotation_files = alt_files
                         break
             
-            # Special case: look for the specific file by name
+            
             specific_file = "mdai_ucsf_project_x9N2LJBZ_annotations_dataset_D_V688LQ_2025-05-21-155628.json"
             possible_locations = [DATA_DIR, '.', '..', os.path.join('..', 'data')]
             
@@ -5210,7 +4960,7 @@ if __name__ == "__main__":
             print(f"  {i+1}. {file} - {file_size:.2f} MB")
 
         if annotation_files:
-            # Sort by modification time (newest first)
+          
             annotation_files.sort(key=lambda f: os.path.getmtime(os.path.join(DATA_DIR, f)), reverse=True) 
 
             annotations_file = os.path.join(DATA_DIR, annotation_files[0])
@@ -5229,7 +4979,7 @@ if __name__ == "__main__":
             except:
                print("Could not get memory usage")
            
-            # Add JSON loading code here - THIS IS THE PART THAT WAS MISSING
+            
             print("Starting JSON loading process...")
             try:
                 import signal
@@ -5237,7 +4987,7 @@ if __name__ == "__main__":
                 def timeout_handler(signum, frame):
                     raise TimeoutError("JSON loading timed out")
                
-                # Set timeout to prevent hanging
+        
                 signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(60)  # 60 second timeout
                
@@ -5277,13 +5027,13 @@ if __name__ == "__main__":
                
                 # Now process free fluid annotations
                 free_fluid_annotations = annotations_df[
-                    ((annotations_df['labelId'] == LABEL_ID_FREE_FLUID) |  # Change to FREE_FLUID
+                    ((annotations_df['labelId'] == LABEL_ID_FREE_FLUID) |  
                      (annotations_df['labelId'] == LABEL_ID_NO_FLUID)) &
                     (annotations_df['frameNumber'].notna())
                 ].copy()
                 
                 print(f"Found {len(free_fluid_annotations)} free fluid annotations")
-                print(f"Using LABEL_ID_FREE_FLUID: {LABEL_ID_FREE_FLUID}")  # Update debug output
+                print(f"Using LABEL_ID_FREE_FLUID: {LABEL_ID_FREE_FLUID}")  
                 print(f"Using LABEL_ID_NO_FLUID: {LABEL_ID_NO_FLUID}")
 
                 # Extract foreground data from annotations
@@ -5346,84 +5096,6 @@ if __name__ == "__main__":
                 print("\nBefore filtering:")
                 print(f"Total annotations: {len(free_fluid_annotations)}")
 
-                # Debug exam 91 before filtering
-                exam_91_annotations = free_fluid_annotations[
-                    free_fluid_annotations['StudyInstanceUID'] == "1.2.826.0.1.3680043.8.498.21582572478922879563110991046360588727"
-                ]
-                if len(exam_91_annotations) > 0:
-                    print("\nExam 91 annotations before filtering:")
-                    print(f"Total exam 91 annotations: {len(exam_91_annotations)}")
-                    print("Label IDs:", exam_91_annotations['labelId'].unique().tolist())
-                    print("Frame numbers:", sorted(exam_91_annotations['frameNumber'].unique().tolist()))
-                    
-                    # Debug each annotation in detail
-                    print("\nDetailed exam 91 annotation info:")
-                    for idx, row in exam_91_annotations.iterrows():
-                        print(f"\nAnnotation {idx}:")
-                        print(f"  Label ID: {row.get('labelId')}")
-                        print(f"  Frame number: {row.get('frameNumber')}")
-                        print(f"  Is dict: {isinstance(row, dict)}")
-                        print(f"  Type: {type(row)}")
-                        print(f"  Available attributes:", row.index.tolist())
-                        print(f"  No-fluid check result:", is_no_fluid_annotation(row))
-                        
-                        # Try to access as dict
-                        try:
-                            print(f"  Dict access - labelId:", row.get('labelId'))
-                        except Exception as e:
-                            print(f"  Dict access error: {str(e)}")
-                        
-                        # Try to access as pandas Series
-                        try:
-                            print(f"  Series access - labelId:", row['labelId'])
-                        except Exception as e:
-                            print(f"  Series access error: {str(e)}")
-
-                fluid_annotations = free_fluid_annotations[free_fluid_annotations.apply(is_fluid_annotation, axis=1)]
-                no_fluid_annotations = free_fluid_annotations[free_fluid_annotations.apply(is_no_fluid_annotation, axis=1)]
-
-                print(f"\nAfter validation:")
-                print(f"  Valid fluid annotations: {len(fluid_annotations)}")
-                print(f"  Valid no-fluid annotations: {len(no_fluid_annotations)}")
-
-                # Debug exam 91 after filtering
-                exam_91_fluid = fluid_annotations[
-                    fluid_annotations['StudyInstanceUID'] == "1.2.826.0.1.3680043.8.498.21582572478922879563110991046360588727"
-                ]
-                exam_91_no_fluid = no_fluid_annotations[
-                    no_fluid_annotations['StudyInstanceUID'] == "1.2.826.0.1.3680043.8.498.21582572478922879563110991046360588727"
-                ]
-
-                if len(exam_91_fluid) > 0 or len(exam_91_no_fluid) > 0:
-                    print("\nExam 91 annotations after filtering:")
-                    print(f"  Fluid annotations: {len(exam_91_fluid)}")
-                    print(f"  No-fluid annotations: {len(exam_91_no_fluid)}")
-                    if len(exam_91_fluid) > 0:
-                        print("  Fluid frame numbers:", sorted(exam_91_fluid['frameNumber'].unique().tolist()))
-                    if len(exam_91_no_fluid) > 0:
-                        print("  No-fluid frame numbers:", sorted(exam_91_no_fluid['frameNumber'].unique().tolist()))
-
-                # Combine the annotations back together
-                free_fluid_annotations = pd.concat([fluid_annotations, no_fluid_annotations])
-                
-                print(f"Found {sum(free_fluid_annotations['file_exists'])} existing video files")
-
-                # Debug exam 91 video path
-                for idx, row in free_fluid_annotations.iterrows():
-                    study_uid = row.get('StudyInstanceUID')
-                    if study_uid == "1.2.826.0.1.3680043.8.498.21582572478922879563110991046360588727":
-                        series_uid = row.get('SeriesInstanceUID')
-                        video_path = row.get('video_path')
-                        exists = os.path.exists(video_path)
-                        print(f"DEBUG Exam 91: Video path {video_path} exists: {exists}")
-
-                # Filter to only include videos that exist
-                free_fluid_annotations = free_fluid_annotations[free_fluid_annotations['file_exists']]
-                print(f"After filtering, {len(free_fluid_annotations)} annotations remain")
-               
-                
-               
-                print("Test completed. Proceeding with full ground truth creation...")
                
                 print("\n=== PROCESSING FREE FLUID ANNOTATIONS ===")
                 
@@ -5497,7 +5169,7 @@ if __name__ == "__main__":
                 
                 print(f"Found {len(target_videos)} initial video paths")
                 
-                # Filter target videos for specific exam if needed - EXACTLY like feedback loop
+                # Filter target videos for specific exam 
                 if args.exam_id:
                     print(f"\n=== FILTERING FOR EXAM {args.exam_id} ===")
                     filtered_videos = []
@@ -5520,7 +5192,7 @@ if __name__ == "__main__":
                 video_paths = [v[0] for v in target_videos]
                 study_series_pairs = [(v[1], v[2]) for v in target_videos]
                 
-                # Check which videos actually exist
+              
                 existing_videos = []
                 for video_path, study_uid, series_uid in target_videos:
                     if os.path.exists(video_path):
@@ -5643,41 +5315,3 @@ debug_log.close()
 
 
 
-def evaluate_with_sparse_annotations(video_path, ground_truth_masks, flow_processor, output_dir, 
-                            sampling_rate=10, min_frames=3, timeout_seconds=300):
-    """
-    Perform a more genuine evaluation by using sparse annotations as input to the tracking algorithm.
-    """
-    print("\n=== GENUINE EVALUATION WITH SPARSE ANNOTATIONS ===")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Create sparse annotations with sampling info
-    sparse_masks, sampling_info = create_sparse_annotations(ground_truth_masks, sampling_rate, min_frames)
-    if not sparse_masks:
-        error_info = sampling_info.get("error", "No sparse masks could be created")
-        return {
-            "error": error_info,
-            "metrics": {"mean_iou": 0.0, "median_iou": 0.0, "mean_dice": 0.0, "iou_over_0.7": 0.0},
-            "sampling_info": sampling_info
-        }
-    
-    # Rest of the existing function code...
-    # ... (keep all the existing code until the results dictionary)
-    
-    # Update the results dictionary to include sampling information
-    results = {
-        "metrics": metrics,
-        "sampling_info": sampling_info,
-        "evaluation_details": {
-            "sparse_frame_count": len(sparse_masks),
-            "tracked_frame_count": len(algorithm_masks_clean),
-            "evaluation_frame_count": len(filtered_gt),
-            "matched_frame_count": len(set(filtered_algo.keys()) & set(filtered_gt.keys())),
-        },
-        "visualization_path": vis_path
-    }
-    
-    print(f"Sparse evaluation complete - matched {results['evaluation_details']['matched_frame_count']} frames")
-    print(f"Mean IoU: {metrics.get('summary', {}).get('mean_iou', 0):.4f}")
-    
-    return results
