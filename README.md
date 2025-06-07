@@ -14,7 +14,7 @@ Goobusters is a semi-automated pipeline that transforms sparse expert annotation
 
 The system addresses these by:
 - Testing multiple sampling rates (1:5, 1:15, 1:20, 1:30, 1:50 frame sampling)
-- Using bidirectional optical flow propagation across video sequences
+- Using bidirectional optical flow propagation across video sequences (as described in MultiFrameTracker)
 - Evaluating performance with IoU and Dice coefficients
 - Investigating adaptive parameter learning for compensation
 
@@ -153,7 +153,7 @@ Test whether adaptive parameters compensate for sparse input:
 ```bash
 # Test parameter compensation hypothesis
 python src/consolidated_tracking.py --feedback-loop \
-    --learning-mode \
+    --learning-mode \ #learning mode enables parameter tuning across iterations
     --input-sampling-rate 15 \
     --iterations 4 \
     --exam-id 186
@@ -162,11 +162,11 @@ python src/consolidated_tracking.py --feedback-loop \
 python src/consolidated_tracking.py --feedback-loop \
     --input-sampling-rate 30 \
     --iterations 4 \
-    --exam-id 186  # Test without learning mode
+    --exam-id 186  #Test without learning mode
 ```
 
 ### 4. Fluid Complexity Analysis
-Analyze performance by fluid presentation type:
+Analyse performance by fluid presentation type:
 
 ```bash
 # Test on multiple distinct fluid patterns (challenging)
@@ -205,28 +205,6 @@ python src/consolidated_tracking.py --feedback-loop \
 
 ## Research Applications
 
-### Clinical Validation Studies
-```bash
-# Replicate optimal performance findings
-python src/consolidated_tracking.py --feedback-loop \
-    --input-sampling-rate 15 \
-    --genuine-evaluation \
-    --iterations 4 \
-    --exam-id 186
-
-# Test quality cliff boundary
-python src/consolidated_tracking.py --feedback-loop \
-    --input-sampling-rate 20 \
-    --genuine-evaluation \
-    --exam-id 186
-
-# Validate parameter learning counterproductivity
-python src/consolidated_tracking.py --feedback-loop \
-    --learning-mode \
-    --input-sampling-rate 30 \
-    --iterations 4
-```
-
 ### Fluid Morphology Studies
 ```bash
 # Study challenging cases (multiple distinct patterns)
@@ -246,7 +224,7 @@ python src/consolidated_tracking.py --create-ground-truth \
     --ground-truth-videos 20
 ```
 
-### FAST Workflow Optimization
+### FAST Workflow Optimisation
 ```bash
 # Emergency department simulation (minimal time)
 python src/consolidated_tracking.py --feedback-loop \
@@ -405,34 +383,10 @@ For pediatric FAST AI model development:
 - Institution-specific validation recommended
 - Adaptive algorithms required for different fluid complexities
 
-## Contributing
-
-We welcome contributions, especially in:
-- Novel optical flow algorithms for medical imaging
-- Quality metrics development
-- Clinical validation studies
-- Computational efficiency improvements
-
-## Citation
-
-If you use this work in your research, please cite:
-```bibtex
-@article{goobusters2024,
-  title={Optical Flow-Based Blood Tracking and Annotation Propagation in Paediatric Abdominal Ultrasound Videos},
-  author={[Your Name]},
-  journal={[Journal Name]},
-  year={2024},
-  note={Research on minimum viable annotation input for clinically acceptable tracking accuracy in pediatric FAST examinations}
-}
-```
-
-## License
-
-[Your chosen license]
 
 ## Acknowledgments
 
-- Pediatric Emergency Care Applied Research Network (PECARN)
-- Emergency medicine physicians with specialized FAST training
+- Pediatric Emergency Care Applied Research Network (PECARN) for the data
+- Dr. Aaron Kornblith, Newton Addo, and Christopher Seaman from UCSF.ß
 - MD.ai platform for annotation management
 - OpenCV community for Dense Inverse Search implementation
